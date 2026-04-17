@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img" aria-label="Zaude — Don't vibe code. Zaude code.">
+  <title>Zaude</title>
+  <desc>Zaude framework banner. Tagline: Don't vibe code. Zaude code.</desc>
+
+  <!-- Background -->
+  <rect x="0" y="0" width="1200" height="300" fill="#08090a"/>
+  <!-- Subtle brand gradient glow -->
+  <defs>
+    <radialGradient id="glow" cx="30%" cy="50%" r="55%">
+      <stop offset="0%" stop-color="#5e6ad2" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#5e6ad2" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="1200" height="300" fill="url(#glow)"/>
+
+  <!-- Logo mark (left) -->
+  <g transform="translate(90, 85)">
+    <rect x="0" y="0" width="130" height="130" rx="24" fill="#0f1011" stroke="rgba(255,255,255,0.10)" stroke-width="1"/>
+    <path d="M 30 38 L 96 38" stroke="#f7f8f8" stroke-width="12" stroke-linecap="round"/>
+    <path d="M 96 38 L 34 94" stroke="#5e6ad2" stroke-width="12" stroke-linecap="round"/>
+    <path d="M 34 94 L 100 94" stroke="#f7f8f8" stroke-width="12" stroke-linecap="round"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="270" y="150"
+        font-family="'Inter', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif"
+        font-size="98"
+        font-weight="700"
+        letter-spacing="-0.04em"
+        fill="#f7f8f8">Zaude</text>
+
+  <!-- Tagline -->
+  <text x="272" y="205"
+        font-family="'Inter', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif"
+        font-size="26"
+        font-weight="500"
+        letter-spacing="0.005em"
+        fill="#8a8f98">Don't vibe code.
+    <tspan fill="#5e6ad2">Zaude code.</tspan>
+  </text>
+
+  <!-- Subtitle (small) -->
+  <text x="272" y="240"
+        font-family="'Inter', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif"
+        font-size="17"
+        font-weight="400"
+        letter-spacing="0.01em"
+        fill="#62666d">Persistent memory, durable workflow, and production discipline for Claude Code.</text>
+</svg>

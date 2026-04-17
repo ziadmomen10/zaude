@@ -1,0 +1,32 @@
+%% Zaude session lifecycle. Render with any Mermaid-compatible renderer.
+
+sequenceDiagram
+    autonumber
+    participant U as You
+    participant CC as Claude Code
+    participant H as SessionStart hook
+    participant V as Vault
+    participant M as Memory
+    participant R as Remote (GitHub)
+
+    U->>CC: Open Claude Code session
+    CC->>H: fire SessionStart
+    H->>V: read CLAUDE.md, current-state, decisions,<br/>open-questions, spec, architecture,<br/>last 3 session logs
+    H->>V: read 03-patterns/*.md
+    H->>M: read every memory file
+    H->>CC: inject as additionalContext
+
+    U->>CC: /start
+    CC->>U: Report:<br/>• last session summary<br/>• in-flight work<br/>• blocking issues<br/>• active memory rules<br/>• next concrete action
+
+    U->>CC: /build <feature>
+    Note over CC: plan → design → implement<br/>→ code-reviewer<br/>→ architect-review (REVIEW)<br/>→ security-auditor (if applicable)
+    CC->>U: Findings by severity
+
+    U->>CC: /ship (if review passed)
+    Note over CC: commit, push to project remote,<br/>update current-state.md,<br/>append session log + decisions
+    CC->>R: push project + vault
+
+    U->>CC: /wrap
+    Note over CC: final code review,<br/>vault update, memory sweep,<br/>credential rotation list
+    CC->>R: push vault + claude-config

@@ -1,0 +1,33 @@
+# Zaude repo — .gitignore
+# This is the repo itself, not the claude-config or vault that users create.
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python bytecode (hooks are .py and get imported in tests eventually)
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Env / secrets (belt-and-suspenders; no secret-bearing files should exist in this repo)
+.env
+.env.*
+*.credentials.json
+
+# Build artifacts (none expected for a docs/template repo)
+dist/
+build/
+node_modules/
+
+# Test / scratch directories
+/scratch/
+/tmp/

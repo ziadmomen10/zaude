@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="Zaude logo">
+  <title>Zaude</title>
+  <desc>A stylized Z monogram with an indigo diagonal suggesting flow and continuity across sessions.</desc>
+  <!-- Rounded-square canvas -->
+  <rect x="4" y="4" width="112" height="112" rx="22" fill="#08090a" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+  <!-- Top bar (white) -->
+  <path d="M 32 36 L 86 36" stroke="#f7f8f8" stroke-width="11" stroke-linecap="round"/>
+  <!-- Diagonal (indigo — the Zaude accent) -->
+  <path d="M 86 36 L 34 86" stroke="#5e6ad2" stroke-width="11" stroke-linecap="round"/>
+  <!-- Bottom bar (white) -->
+  <path d="M 34 86 L 88 86" stroke="#f7f8f8" stroke-width="11" stroke-linecap="round"/>
+</svg>

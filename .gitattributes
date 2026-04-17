@@ -1,0 +1,15 @@
+# Preserve LF line endings for scripts that must run on Linux/macOS.
+# Windows users cloning this repo should NOT see CRLF in these files
+# or bash will fail with "bad interpreter" errors.
+
+*.sh text eol=lf
+*.py text eol=lf
+
+# Default: auto-normalize so .md renders consistently everywhere
+* text=auto
+
+# Binary / non-text files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.svg text eol=lf

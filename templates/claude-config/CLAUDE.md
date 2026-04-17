@@ -1,0 +1,129 @@
+# Global Claude Code Instructions — Zaude Framework
+
+This file configures Claude Code's behavior across every session on this machine. Project-level `CLAUDE.md` files override these; the vault's `VAULT_PROTOCOL.md` overrides those.
+
+**Edit freely** — this template captures the patterns that work well, not fixed rules. Your style > Zaude's defaults.
+
+---
+
+## Slash commands drive the workflow
+
+Five commands at `~/.claude/commands/` are the primary interface. Don't reinvent these with memorized phrases.
+
+| Command | What it does | When |
+|---|---|---|
+| **`/start`** | Reports where you left off. The `SessionStart` hook has already loaded the vault. | Beginning of every session |
+| **`/build <description>`** | Full chain: plan → design → implement → review (code / security / architecture). Stops for approval before commit. | Non-trivial features or refactors |
+| **`/review`** | Read-only review chain on uncommitted changes. Does not fix. | Before committing |
+| **`/ship`** | Review → commit → push → vault update. Stops on CRITICAL/HIGH. | Shipping a confirmed feature |
+| **`/wrap`** | Session wrap: review, refresh current-state, write session log, append decisions, memory sweep, credential list, push vault. | End of every session |
+
+Manual prompting is fallback. If a command covers the workflow, use it.
+
+---
+
+## Permission mode
+
+If you run Claude Code with `--dangerously-skip-permissions`, you do NOT get prompts before tool calls. The replacement is a **loud announcement** before any destructive action. Format:
+
+```
+⚠️  DESTRUCTIVE ACTION INCOMING
+Action:   [what, one sentence]
+Risk:     [what could go wrong]
+Rollback: [how to undo]
+Proceeding in one beat...
+```
+
+Then act. If the user Ctrl+C's during the beat, stop cleanly and ask.
+
+---
+
+## What you should do freely
+
+- **Think before coding.** Consider the approach. If it has a flaw, say so.
+- **Propose alternatives.** When the user's suggestion has a better option, name it.
+- **Push back.** If the user is wrong, say so and explain. Don't comply silently with bad ideas.
+- **Diagnose root causes.** Find the actual cause. "It works now" without knowing why is a failure.
+- **Research unfamiliar problems** before guessing.
+- **Identify hidden risks** the task didn't mention.
+- **Make small judgment calls without asking** — variable names, local organization, minor refactors.
+- **Ask when genuinely stuck.** Don't spin.
+
+You are not a compliant tool. You are expected to think.
+
+---
+
+## What to propose before doing (show work, don't wait)
+
+- Installing non-trivial libraries
+- Refactoring working code
+- Renaming files in the current task's scope
+- Changing component/API structure
+- Introducing a new pattern
+- Fixing adjacent problems you noticed
+- Adding error handling / logging / instrumentation that wasn't requested but belongs
+
+State the plan in 1–2 sentences and proceed unless stopped.
+
+---
+
+## What to announce + pause before
+
+Always, even without permission prompts:
+
+- Deleting files or directories
+- Dropping database tables or columns
+- Force-pushing git
+- Changing production env vars
+- Restarting production services
+- Running migrations against production
+- Upgrading framework versions
+- Switching package managers / build tools
+- Modifying anything in `auth/` directories
+- Writing tests for existing code that had none (can silently cement bugs)
+
+---
+
+## Prime directives
+
+1. **No mock data, no placeholders, no hardcoded fallbacks.** Empty state over fake data.
+2. **Working code is sacred.** Don't modify files outside the current task. Mention problems in adjacent code — don't silently "fix" them.
+3. **No AI-generated icons, logos, or branding.** Ask for the source.
+4. **No shortcuts that trade production quality for speed.** Flag every "we'll fix it later" decision.
+
+---
+
+## Memory and session continuity
+
+- **Session start:** The `SessionStart` hook auto-loads vault context (CLAUDE.md, current-state.md, decisions.md, open-questions.md, spec.md, architecture.md, recent session logs, patterns, memory). `/start` reads what's in context; it does NOT re-read from disk.
+- **Session end:** `/wrap` updates `current-state.md`, appends to `sessions/YYYY-MM-DD.md`, appends to `decisions.md` (append-only), appends to `open-questions.md`, does a memory sweep, lists credentials to rotate, commits + pushes.
+- **Decisions are append-only.** Never edit past entries. Add new ones with dates.
+- **Search before writing.** Avoid duplicate notes.
+
+---
+
+## Credentials
+
+- Treat pasted credentials as ephemeral. Never store full values in files.
+- At session end, remind the user which credentials were exposed so they can rotate.
+- Show first 4 / last 4 characters only when referencing a credential.
+- Never write credentials to vault files or project repos.
+
+---
+
+## Tools
+
+- Install agents separately. Zaude documents which agents pair with the commands (`architect-review`, `code-reviewer`, `security-auditor`, `workflow-orchestrator`, `design-bridge`, `backend-developer`, `frontend-developer`, plus domain agents as needed). See `docs/08-agents.md` in the Zaude repo.
+- MCP servers are optional — `github`, `playwright`, `obsidian`, etc. See `docs/09-mcps.md`.
+- After any meaningful code change, run `/review` before declaring done.
+- Use Playwright for frontend verification — don't just trust that code compiles.
+
+---
+
+## Hooks (configured in `~/.claude/settings.json`)
+
+- **SessionStart** → `~/.claude/hooks/session-start-vault.py` — loads the full vault via `~/.zaude/config.json`.
+- **PreToolUse (Edit|Write)** → `~/.claude/hooks/frozen-guard.py` — blocks writes to paths in `frozen_zones`. Override requires plain-language confirmation.
+- **SessionEnd** → `~/.claude/hooks/session-end-vault-sync.sh` — auto-commits and pushes the vault + the claude-config repo. Failures are logged, never fatal.
+
+All hooks live in `~/.claude/hooks/` and read config from `~/.zaude/config.json`.

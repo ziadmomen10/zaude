@@ -1,0 +1,38 @@
+%% Zaude system architecture. Render with any Mermaid-compatible renderer.
+%% GitHub renders this automatically when embedded in markdown fenced as ```mermaid.
+
+flowchart LR
+    U["👤 User"] -->|slash command| CC["Claude Code"]
+
+    subgraph Z["Zaude Framework"]
+        direction TB
+        SS["SessionStart hook<br/>session-start-vault.py"]
+        CMD["/start · /build<br/>/review · /ship · /wrap"]
+        PT["PreToolUse hook<br/>frozen-guard.py"]
+        SE["SessionEnd hook<br/>session-end-vault-sync.sh"]
+    end
+
+    CC --> Z
+
+    subgraph V["Vault (git-tracked)"]
+        direction TB
+        VP["VAULT_PROTOCOL.md"]
+        PROJ["01-projects/<slug>/<br/>• CLAUDE.md<br/>• current-state.md<br/>• decisions.md<br/>• open-questions.md<br/>• sessions/"]
+        PAT["03-patterns/<br/>• anti-patterns<br/>• credentials<br/>• agent-usage"]
+    end
+
+    subgraph M["Memory (git-tracked)"]
+        MEM["~/.claude/projects/*/memory/<br/>• feedback_*<br/>• project_*<br/>• user_*<br/>• reference_*"]
+    end
+
+    SS -->|reads on every SessionStart| V
+    SS -->|reads on every SessionStart| M
+    SE -->|commits + pushes| V
+    SE -->|commits + pushes| M
+
+    classDef zaude fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+    classDef vault fill:#0f1011,stroke:#8a8f98,color:#f7f8f8
+    classDef platform fill:#191a1b,stroke:#62666d,color:#f7f8f8
+    class Z zaude
+    class V,M vault
+    class CC,U platform

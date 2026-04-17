@@ -1,0 +1,34 @@
+# Curated gitignore for a user's ~/.claude/ repo under Zaude.
+# Strategy: ignore everything, then re-include specific paths.
+# This protects credentials and caches while tracking the durable config.
+
+# Ignore everything by default
+*
+
+# Re-include Zaude-tracked config
+!commands/
+!commands/**
+!hooks/
+!hooks/**
+!agents/
+!agents/**
+!skills/
+!skills/**
+!CLAUDE.md
+!settings.json
+!.gitignore
+!README.md
+
+# Memory files — cwd-keyed feedback/project/user/reference memories.
+# Include ONLY the memory/ subdir of each project; conversation transcripts
+# and caches under projects/<cwd>/ stay ignored.
+!projects/
+!projects/*/
+!projects/*/memory/
+!projects/*/memory/**
+
+# Never track these, even if they appear inside tracked dirs.
+**/*.log
+**/*.credentials.json
+**/.credentials.json
+**/session-end-vault-sync.log
