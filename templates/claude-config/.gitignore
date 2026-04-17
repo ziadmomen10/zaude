@@ -33,3 +33,5 @@
 **/*.credentials.json
 **/.credentials.json
 **/session-end-vault-sync.log
+**/__pycache__/
+**/*.pyc
