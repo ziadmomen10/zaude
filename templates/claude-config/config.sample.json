@@ -1,0 +1,19 @@
+{
+  "_comment_": "Zaude framework config. Install to ~/.zaude/config.json. Remove underscore-prefixed comment keys before use.",
+
+  "vault_path": "~/zaude-vault",
+  "projects_subdir": "01-projects",
+  "patterns_subdir": "03-patterns",
+
+  "_comment_cwd_to_project": "Explicit map of cwd-basename → vault-project-slug for projects whose working-directory name doesn't match the vault folder name. Leave {} if your cwd names match your vault folders.",
+  "cwd_to_project": {
+  },
+
+  "_comment_frozen_zones": "List of path substrings Claude must never write to. Used by frozen-guard.py. Example: ['legacy-app', 'production-vendor-dir']. Leave [] to disable.",
+  "frozen_zones": [
+  ],
+
+  "recent_session_logs": 3,
+
+  "claude_config_path": "~/.claude"
+}

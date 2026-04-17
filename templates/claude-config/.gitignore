@@ -18,6 +18,7 @@
 !settings.json
 !.gitignore
 !README.md
+!config.sample.json
 
 # Memory files — cwd-keyed feedback/project/user/reference memories.
 # Include ONLY the memory/ subdir of each project; conversation transcripts
