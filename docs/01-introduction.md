@@ -2,15 +2,15 @@
 
 > **Don't vibe code. Zaude code.**
 
-Zaude is a framework layered on top of [Claude Code](https://claude.com/claude-code) that turns a capable-but-amnesic coding assistant into a disciplined collaborator with memory, review gates, and production habits baked in.
+Zaude is a framework for [Claude Code](https://claude.com/claude-code) that replaces "the model kinda remembers" with mechanical guarantees. Memory, review gates, decision history, credential hygiene, and frozen-path protection — all enforced at the hook level, not asked nicely in a prompt.
 
-This doc explains **what Zaude is**, **what problem it solves**, **who it's for**, and **the mental model** you'll use when you read the rest of the documentation.
+This doc covers **what Zaude is**, **why it exists**, **who it's for**, and the **mental model** that makes the rest of the docs click.
 
 ---
 
-## The one-paragraph pitch
+## The short version
 
-Out of the box, Claude Code is a capable assistant that forgets everything between sessions. Zaude adds three things: a **vault** that remembers your project across sessions, **slash commands** that drive a standard plan → design → implement → review workflow, and **hooks** that mechanically enforce the parts you need to be automatic — auto-loading context on session start, blocking writes to frozen paths, and auto-syncing your vault to GitHub when the session ends.
+Claude Code forgets everything between sessions. Zaude adds three things: a **vault** that remembers your project across sessions, **slash commands** that drive a standard plan → design → implement → review workflow, and **hooks** that mechanically enforce the automatic parts — context loading at session start, writes blocked for frozen paths, vault synced to GitHub at session end, and (new in v0.3) a verified-facts block that stops the model from citing stale prose.
 
 ---
 
@@ -75,19 +75,20 @@ flowchart LR
 
 Anything Zaude guarantees — "context is always loaded at session start", "frozen paths are always blocked", "the vault is always pushed at session end" — lives in a hook. Hooks are executed by the Claude Code harness itself, not by the LLM, so they fire 100% of the time regardless of whether the model "remembers" to do them.
 
-The three Zaude hooks:
+The Zaude hooks:
 
 | Hook | Fires on | Script | What it does |
 |---|---|---|---|
-| `SessionStart` | New session opens | `session-start-vault.py` | Reads the vault + memory and injects `additionalContext` |
+| `SessionStart` | New session opens | `session-start-vault.py` | Reads the vault + memory and injects `additionalContext`. Prepends `=== VERIFIED FACTS ===` above the vault dump so stale prose can't anchor Claude to the wrong state. |
 | `PreToolUse` | Every `Edit` / `Write` call | `frozen-guard.py` | Denies writes to paths containing any frozen-zone substring |
-| `SessionEnd` | Session exits cleanly | `session-end-vault-sync.sh` | `git add -A && git commit && git push` for vault + config |
+| `SessionEnd` (observability) | Session exits cleanly | `current-state-freshness.py` | Logs whether the `<!-- status-freshness -->` block in `current-state.md` is fresh. Can't block the session — that's what `/wrap` step 9 is for. |
+| `SessionEnd` (sync) | Session exits cleanly | `session-end-vault-sync.sh` | `git add -A && git commit && git push` for vault + config |
 
 ### Skills suggest
 
 Anything Zaude documents but cannot technically force — "run the review chain before committing", "design before coding", "trigger `security-auditor` on auth changes" — lives in a slash command or a pattern file. These are markdown instructions the model reads when you invoke them. They're fine for workflow documentation and for cases where the model has enough context to do the right thing; they're **not** fine for mechanical guarantees.
 
-The five slash commands:
+The six slash commands:
 
 | Command | Role |
 |---|---|
@@ -95,7 +96,8 @@ The five slash commands:
 | `/build` | Run the plan → design → implement → review chain |
 | `/review` | Read-only review of uncommitted changes |
 | `/ship` | Review → commit → push → vault update |
-| `/wrap` | End-of-session: code review, vault refresh, memory sweep, credential list, push |
+| `/wrap` | End-of-session: code review, vault refresh, freshness regen + gate, memory sweep, credential list, push |
+| `/zaude-push` | Open a PR against the Zaude framework with any local improvements you want upstream |
 
 ### Vault remembers
 
@@ -201,21 +203,21 @@ Zaude doesn't replace Claude Code — it thickens it. If you already like Claude
 
 ---
 
-## What you'll feel on day one
+## What you'll notice on day one
 
-The install takes 5-10 minutes. After it's done, you'll notice:
+Install takes 5-10 minutes. After it runs:
 
-- Every new Claude Code session opens with a `=== VAULT CONTEXT FOR <your-project> ===` block — the model already knows your project.
-- Typing `/start` produces a one-paragraph "here's where we left off" report, not a generic greeting.
-- Typing `/build <feature>` triggers the full workflow chain — no need to prompt for review, security, or architecture checks individually.
-- At the end of the session, closing Claude Code triggers an automatic commit + push of the vault. You'll see a new commit in GitHub without lifting a finger.
+- Every new session opens with a `=== VERIFIED FACTS ===` block (from `/wrap`'s last run) and a `=== VAULT CONTEXT FOR <your-project> ===` block injected by the hook. The model sees your project before you type anything.
+- `/start` produces a one-paragraph "here's where we left off" report — not a generic greeting.
+- `/build <feature>` runs the full chain: plan → design → implement → review. Review gates stop on CRITICAL / HIGH findings automatically.
+- When you close the session, the vault and Claude-config auto-commit and push. You'll see a fresh commit in GitHub without lifting a finger.
 
-What you **won't** feel:
+What you **won't** experience:
 
-- Any change to how Claude Code itself works.
-- Any new UI or dashboard.
-- Any subscription, API charge, or service to log into.
-- Any lock-in. Every file is plain markdown; every script is a few dozen lines of Python or bash. You can read the whole framework in an afternoon.
+- Any change to how Claude Code itself works. Same chat, same tools.
+- A new UI, dashboard, or subscription.
+- Any API charge. Zaude doesn't call Anthropic directly.
+- Lock-in. Plain markdown, a few hundred lines of Python and bash. You can read the whole framework in an afternoon and rip out any piece you don't want.
 
 ---
 
