@@ -83,12 +83,25 @@ if [ -z "$PYCMD" ]; then
   exit 1
 fi
 
+# Normalize the config path so Python can open it on Windows (Git Bash's
+# /c/... format is not recognized by the Windows Python interpreter).
+if command -v cygpath >/dev/null 2>&1; then
+  CONFIG_NORM="$(cygpath -m "$CONFIG")"
+else
+  CONFIG_NORM="$CONFIG"
+fi
+
+# Export so the Python heredoc can reach them via env.
+export ZAUDE_CONFIG_PATH="$CONFIG_NORM"
+
 read_config_field() {
-  "$PYCMD" -c "
+  ZAUDE_FIELD="$1" "$PYCMD" -c "
 import json, os, sys
-with open(os.path.expanduser('$CONFIG')) as f:
+path = os.environ['ZAUDE_CONFIG_PATH']
+field = os.environ['ZAUDE_FIELD']
+with open(path, encoding='utf-8') as f:
     c = json.load(f)
-v = c.get('$1')
+v = c.get(field)
 if isinstance(v, (list, dict)):
     print(json.dumps(v))
 elif v is None:
@@ -104,6 +117,29 @@ CLAUDE_CONFIG_PATH=$(read_config_field claude_config_path)
 PATTERNS_SUBDIR=$(read_config_field patterns_subdir)
 [ -z "$CLAUDE_CONFIG_PATH" ] && CLAUDE_CONFIG_PATH="$HOME/.claude"
 [ -z "$PATTERNS_SUBDIR" ] && PATTERNS_SUBDIR="03-patterns"
+
+# Read sync_exclude list (paths relative to ~/.claude/ or vault/)
+EXCLUDE_JSON=$(read_config_field sync_exclude)
+SYNC_EXCLUDE=()
+if [ -n "$EXCLUDE_JSON" ] && [ "$EXCLUDE_JSON" != "[]" ] && [ "$EXCLUDE_JSON" != "" ]; then
+  while IFS= read -r line; do
+    # Strip trailing \r on Windows (Python's print adds \r\n on MSYS/Git-Bash pipe).
+    line="${line%$'\r'}"
+    [ -n "$line" ] && SYNC_EXCLUDE+=("$line")
+  done < <(ZAUDE_JSON="$EXCLUDE_JSON" "$PYCMD" -c "import json, os; [print(x) for x in json.loads(os.environ['ZAUDE_JSON'])]" 2>/dev/null)
+fi
+
+# Returns 0 (excluded) if the given relative path matches an entry in
+# SYNC_EXCLUDE. The match is substring-based on the relative path under
+# ~/.claude/ or the vault (e.g. 'commands/ship.md', '03-patterns/foo.md').
+is_excluded() {
+  local rel="$1"
+  for pattern in "${SYNC_EXCLUDE[@]}"; do
+    [ -z "$pattern" ] && continue
+    [[ "$rel" == *"$pattern"* ]] && return 0
+  done
+  return 1
+}
 
 if [ -z "$ZAUDE_REPO_PATH" ] || [ ! -d "$ZAUDE_REPO_PATH" ]; then
   err "zaude_repo_path not set in $CONFIG (or path does not exist)."
@@ -168,8 +204,9 @@ mkdir -p "$SCRATCH/templates/claude-config/commands"
 if ls "$CLAUDE_CONFIG_PATH/commands/"*.md >/dev/null 2>&1; then
   # Only sync the 5 Zaude commands — not third-party ones that may be installed.
   for cmd in start build review ship wrap zaude-push; do
-    if [ -f "$CLAUDE_CONFIG_PATH/commands/$cmd.md" ]; then
-      cp "$CLAUDE_CONFIG_PATH/commands/$cmd.md" "$SCRATCH/templates/claude-config/commands/$cmd.md"
+    relpath="commands/$cmd.md"
+    if [ -f "$CLAUDE_CONFIG_PATH/$relpath" ] && ! is_excluded "$relpath"; then
+      cp "$CLAUDE_CONFIG_PATH/$relpath" "$SCRATCH/templates/claude-config/$relpath"
     fi
   done
 fi
@@ -177,18 +214,19 @@ fi
 # hooks
 mkdir -p "$SCRATCH/templates/claude-config/hooks"
 for hook in session-start-vault.py session-end-vault-sync.sh frozen-guard.py; do
-  if [ -f "$CLAUDE_CONFIG_PATH/hooks/$hook" ]; then
-    cp "$CLAUDE_CONFIG_PATH/hooks/$hook" "$SCRATCH/templates/claude-config/hooks/$hook"
+  relpath="hooks/$hook"
+  if [ -f "$CLAUDE_CONFIG_PATH/$relpath" ] && ! is_excluded "$relpath"; then
+    cp "$CLAUDE_CONFIG_PATH/$relpath" "$SCRATCH/templates/claude-config/$relpath"
   fi
 done
 
 # settings.json
-if [ -f "$CLAUDE_CONFIG_PATH/settings.json" ]; then
+if [ -f "$CLAUDE_CONFIG_PATH/settings.json" ] && ! is_excluded "settings.json"; then
   cp "$CLAUDE_CONFIG_PATH/settings.json" "$SCRATCH/templates/claude-config/settings.json"
 fi
 
-# global CLAUDE.md (if present and not personal — the lint will catch personal content)
-if [ -f "$CLAUDE_CONFIG_PATH/CLAUDE.md" ]; then
+# global CLAUDE.md
+if [ -f "$CLAUDE_CONFIG_PATH/CLAUDE.md" ] && ! is_excluded "CLAUDE.md"; then
   cp "$CLAUDE_CONFIG_PATH/CLAUDE.md" "$SCRATCH/templates/claude-config/CLAUDE.md"
 fi
 
@@ -197,7 +235,10 @@ if [ -n "$VAULT_PATH" ] && [ -d "$VAULT_PATH/$PATTERNS_SUBDIR" ]; then
   mkdir -p "$SCRATCH/templates/vault/03-patterns"
   for f in "$VAULT_PATH/$PATTERNS_SUBDIR"/*.md; do
     [ -f "$f" ] || continue
-    cp "$f" "$SCRATCH/templates/vault/03-patterns/$(basename "$f")"
+    relpath="03-patterns/$(basename "$f")"
+    if ! is_excluded "$relpath"; then
+      cp "$f" "$SCRATCH/templates/vault/03-patterns/$(basename "$f")"
+    fi
   done
 fi
 

@@ -23,10 +23,15 @@ read_config_field() {
     echo ""
     return
   fi
+  # Normalize config path for Windows Python (Git Bash /c/... is not valid).
+  local config_norm="$CONFIG"
+  if command -v cygpath >/dev/null 2>&1; then
+    config_norm="$(cygpath -m "$CONFIG")"
+  fi
   if command -v python3 >/dev/null 2>&1; then
-    value=$(python3 -c "import json,os,sys; c=json.load(open(os.path.expanduser('$CONFIG'))); v=c.get('$field',''); print(os.path.expanduser(str(v)) if isinstance(v,str) else str(v).lower())" 2>/dev/null)
+    value=$(ZAUDE_CONFIG_PATH="$config_norm" ZAUDE_FIELD="$field" python3 -c "import json,os; c=json.load(open(os.environ['ZAUDE_CONFIG_PATH'],encoding='utf-8')); v=c.get(os.environ['ZAUDE_FIELD'],''); print(os.path.expanduser(str(v)) if isinstance(v,str) else str(v).lower())" 2>/dev/null)
   elif command -v python >/dev/null 2>&1; then
-    value=$(python -c "import json,os,sys; c=json.load(open(os.path.expanduser('$CONFIG'))); v=c.get('$field',''); print(os.path.expanduser(str(v)) if isinstance(v,str) else str(v).lower())" 2>/dev/null)
+    value=$(ZAUDE_CONFIG_PATH="$config_norm" ZAUDE_FIELD="$field" python -c "import json,os; c=json.load(open(os.environ['ZAUDE_CONFIG_PATH'],encoding='utf-8')); v=c.get(os.environ['ZAUDE_FIELD'],''); print(os.path.expanduser(str(v)) if isinstance(v,str) else str(v).lower())" 2>/dev/null)
   else
     value=$(grep -oE "\"$field\"\s*:\s*\"[^\"]+\"" "$CONFIG" | sed -E "s/.*\"$field\"\s*:\s*\"([^\"]+)\".*/\1/" | head -1)
     value="${value/#\~/$HOME}"
