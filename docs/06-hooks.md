@@ -21,7 +21,7 @@ A skill that says *"read the vault on every session"* works until it doesn't. A 
 
 ---
 
-## The three hooks Zaude ships
+## The hooks Zaude ships
 
 ```mermaid
 flowchart LR
@@ -41,11 +41,19 @@ flowchart LR
 
 | Hook | File | Fires | Purpose |
 |---|---|---|---|
-| **SessionStart** | `~/.claude/hooks/session-start-vault.py` | When a new Claude Code session opens | Inject the project vault, pattern files, and local memory as `additionalContext` |
+| **SessionStart** | `~/.claude/hooks/session-start-vault.py` | When a new Claude Code session opens | Inject the project vault, pattern files, local memory, and a `=== VERIFIED FACTS ===` block (from status-freshness) as `additionalContext` |
 | **PreToolUse** | `~/.claude/hooks/frozen-guard.py` | Before every `Edit` or `Write` tool call | Deny writes to paths listed in `frozen_zones` |
-| **SessionEnd** | `~/.claude/hooks/session-end-vault-sync.sh` | When the session is closed | Auto-commit and push the vault + claude-config repos |
+| **SessionEnd** (observability) | `~/.claude/hooks/current-state-freshness.py` | When the session closes | Log whether `current-state.md` has a fresh `<!-- status-freshness -->` block. SessionEnd cannot block anything per Claude Code docs — this is a logger. The real gate is `/wrap` step 9. |
+| **SessionEnd** (sync) | `~/.claude/hooks/session-end-vault-sync.sh` | When the session closes | Auto-commit and push the vault + claude-config repos |
 
-All three are wired in `~/.claude/settings.json`.
+All four are wired in `~/.claude/settings.json`.
+
+The status-freshness trio adds a shared helper module:
+
+| Module | Path | Purpose |
+|---|---|---|
+| Shared parser lib | `~/.claude/hooks/lib/freshness_parse.py` | Single source of truth for `BLOCK_RE`, YAML parser (PyYAML + handwritten fallback), injection sanitizer, read caps. Imported by the three hooks so regex/schema stays in lockstep. |
+| `/wrap` helper | `~/.claude/hooks/lib/regen-freshness.py` | Regenerates the block from today's session log. Called by `/wrap` step 8. |
 
 ---
 
@@ -66,7 +74,8 @@ On every session open, the hook:
 
 ```mermaid
 flowchart TB
-    A[CLAUDE.md] --> B[current-state.md]
+    VF[=== VERIFIED FACTS === / FRESHNESS WARNING] --> A[CLAUDE.md]
+    A --> B[current-state.md]
     B --> C[open-questions.md]
     C --> D[spec.md]
     D --> E[architecture.md]
@@ -77,6 +86,10 @@ flowchart TB
 ```
 
 Each file becomes a section titled by filename. Missing files are silently skipped — no failure cascades.
+
+The `=== VERIFIED FACTS ===` block at the very top comes from the `<!-- status-freshness -->` block in `current-state.md`. If the block is fresh (today's date, points to latest session log), Claude sees a short list of sanitized claims like `- provisioning: 15/15 steps` before any narrative prose. If the block is missing or stale, the injector emits a `=== FRESHNESS WARNING ===` instead — a loud banner telling Claude not to trust the Status paragraph without cross-referencing the latest session log.
+
+All claim text is sanitized before injection: `===`, `<!--`, `-->`, control chars, and strings over 200 chars are neutralized. This prevents prompt injection via malicious claim content under `--dangerously-skip-permissions`.
 
 ### Config keys it reads
 

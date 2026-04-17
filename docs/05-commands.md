@@ -504,7 +504,7 @@ flowchart TD
     style N fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
 ```
 
-The eleven steps:
+The thirteen steps:
 
 1. `code-reviewer` on uncommitted changes (if any)
 2. Update `current-state.md` — refresh status line, known issues, next action, mark done items
@@ -513,14 +513,17 @@ The eleven steps:
 5. Append any new open questions to `open-questions.md` (numbered QN)
 6. Persist new feedback memory from this session into `~/.claude/projects/<cwd>/memory/`
 7. List credentials exposed this session (first 4 / last 4 chars only)
-8. `git fetch origin` on vault — stop if remote has newer commits
-9. `git commit -m "session YYYY-MM-DD: <summary>"`
-10. `git push`
-11. Run `git status` on both repos, report both clean (or exactly what's dirty and why)
+8. **Regenerate the status-freshness block** — `python ~/.claude/hooks/lib/regen-freshness.py`. Parses today's session log for verified claims and rewrites the `<!-- status-freshness -->` block at the top of `current-state.md`.
+9. **Validator gate** — `FRESHNESS_ENFORCE=1 python ~/.claude/hooks/current-state-freshness.py --check --cwd "$(pwd)"`. **Non-zero exit stops the wrap.** The validator's stderr tells you exactly what to fix; usually re-run step 8 after correcting the underlying issue (session log date, missing required field, etc.). This is the real gate — SessionEnd hooks cannot block per Claude Code docs, so the gate lives here in `/wrap` where Claude is still engaged.
+10. `git fetch origin` on vault — stop if remote has newer commits
+11. `git commit -m "session YYYY-MM-DD: <summary>"`
+12. `git push`
+13. Run `git status` on both repos, report both clean (or exactly what's dirty and why)
 
 ### Gates
 
 - `code-reviewer` returns CRITICAL or HIGH on uncommitted work → STOP, don't touch the vault yet
+- **Freshness validator returns non-zero → STOP, re-run regen with a clean session log**
 - Vault has unrelated uncommitted changes (from another project) → do not bundle them
 - Vault remote has newer commits → never force-push; ask user to reconcile
 - Never skip the memory sweep or credential scan "to save tokens"

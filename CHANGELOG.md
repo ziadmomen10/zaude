@@ -4,6 +4,29 @@ All notable changes to Zaude are documented here. This project follows [Keep a C
 
 ---
 
+## [0.3.0] — 2026-04-17
+
+### Added
+- **Status-freshness enforcement** — prevents Claude from anchoring to stale prose in `current-state.md` at session start (the canonical "12/14 vs 15/15" class of disaster). Three pieces working together:
+  - `templates/claude-config/hooks/lib/freshness_parse.py` (NEW) — single source of truth for `BLOCK_RE`, `BLOCK_RE_SPLICE`, YAML parser (PyYAML + handwritten fallback), `sanitize_for_injection`, `read_capped`, required-field schema. All three hooks import from it — no regex drift possible.
+  - `templates/claude-config/hooks/current-state-freshness.py` (NEW) — SessionEnd observer + `--check` mode. Validates the `<!-- status-freshness -->` block has today's date, points to the latest session log, has required fields. Respects `FRESHNESS_ENFORCE` env var (case-insensitive: `1`/`true`/`TRUE`/`YES`). Path-traversal guard via `realpath` + `commonpath`. Warn-only contradiction detection on body-text `N/N noun` patterns.
+  - `templates/claude-config/hooks/lib/regen-freshness.py` (NEW) — `/wrap` helper. Parses today's `sessions/YYYY-MM-DD.md` for verified claims via 4 pattern classes (checked items, ratios, verified markers, confidence words) with consumed-span dedup + `MAX_SCENARIOS=5` cap. Atomic write via `tempfile.mkstemp` + `os.replace`. ISO-date validation on `--log` argument prevents path traversal. Lambda replacement in `BLOCK_RE_SPLICE.sub` so claim text containing `\1` / `\g<name>` doesn't explode as regex backref.
+- **Extended `session-start-vault.py`** — prepends `=== VERIFIED FACTS ===` (happy path) or `=== FRESHNESS WARNING ===` (stale/missing) to `additionalContext` above the existing vault dump. Every claim/name/source/date passes through `sanitize_for_injection` first, neutralizing `===` / `<!--` / `-->` / control chars / overlong strings — prevents prompt injection under `--dangerously-skip-permissions`. 1 MB per-file cap on all vault reads.
+- **`/wrap` step 8 + 9** — step 8 runs `regen-freshness.py`, step 9 runs `FRESHNESS_ENFORCE=1 python ~/.claude/hooks/current-state-freshness.py --check` as the real gate. The SessionEnd hook entry is observability-only; `/wrap` is where enforcement lives.
+- **Settings.json template** — `current-state-freshness.py` wired into `SessionEnd` before `session-end-vault-sync.sh` for clear intent (ordering is cosmetic since SessionEnd can't gate, but makes the flow readable).
+
+### Design decisions in this release
+- **SessionEnd hooks cannot block anything.** Per the official Claude Code docs, SessionEnd exit codes print stderr to the user but do not halt session termination and do not gate other hooks. The enforcement point is `/wrap` step 9 where Claude is still engaged and can respond to a validation error by re-running regen. SessionStart injection is the runtime safety net for any session that bypassed `/wrap`.
+- **One regex, three hooks.** Declaring `BLOCK_RE` three times across three files would guarantee future drift. `lib/freshness_parse.py` is the single source; three hooks import. Trivial `sys.path` overhead, eliminates a whole class of silent-format-skew bugs.
+- **Sanitizer sentinels don't contain their inputs as substrings.** `===` → `[=x=]`, `<!--` → `[!--`, `-->` → `--]`. A naive `-->` → `[-->]` would leak the literal `-->` as a substring; explicit check in tests.
+- **Contradiction detection is warn-only.** If body text says `15/15 steps` but the block doesn't mention it, emit a warning; don't block. Blocking on contradictions would make legitimate narrative drift painful; the block is the source of truth, the body is commentary.
+
+### Verified
+- Two rounds of formal review (`code-reviewer` + `security-auditor` + `architect-review`) in parallel: 2 CRITICAL + 8 HIGH found and fixed in round 1; 3 new HIGH found and fixed in round 2.
+- 169-test E2E harness across 19 categories (parser, validator, regen, injector, frozen-guard, settings wiring, Zaude parity, auto-sync, memory system, MCP config, vault structure, docs, install files, `/wrap` pipeline simulation, orchestration chain order): **168/169 pass**. The one failure was a pre-existing framework state (agent file missing YAML frontmatter), not a regression from this feature.
+
+---
+
 ## [0.2.0] — 2026-04-17
 
 ### Added
