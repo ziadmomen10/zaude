@@ -2,13 +2,14 @@
 
 <img src="./assets/logo.svg" alt="Zaude" width="140" height="140" />
 
-# Zaude
+# Zaude&trade;
 
 ### Don't vibe code. Zaude code.
 
 **Persistent memory, durable workflow, and production discipline for Claude Code.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-5e6ad2.svg)](./LICENSE)
+[![Trademark: Zaude™](https://img.shields.io/badge/Zaude-%E2%84%A2%20trademark-8a8f98.svg)](./TRADEMARK.md)
 [![Version](https://img.shields.io/badge/version-0.1.0-5e6ad2.svg)](./CHANGELOG.md)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-compatible-5e6ad2.svg)](https://claude.com/claude-code)
 [![Status](https://img.shields.io/badge/status-active-10b981.svg)](#)
@@ -206,6 +207,7 @@ sequenceDiagram
 | [11 — Best practices](./docs/11-best-practices.md) | Do's and don'ts — the philosophy |
 | [12 — Troubleshooting](./docs/12-troubleshooting.md) | Common issues and fixes |
 | [13 — Customization](./docs/13-customization.md) | Adapting Zaude for your workflow |
+| [14 — Auto-sync](./docs/14-auto-sync.md) | Propagating framework improvements back to Zaude via PR |
 
 ---
 
@@ -237,9 +239,19 @@ Priority areas:
 
 ---
 
-## 📜 License
+## 📜 License and trademark
 
-[MIT](./LICENSE) — use, modify, ship, sell. Attribution appreciated, not required.
+The **code** is [MIT](./LICENSE) — use it, modify it, ship it, sell it. Attribution is appreciated.
+
+The **name "Zaude"** is an unregistered trademark (™) of Ziad Momen and is **not** covered by the MIT license. If you fork and substantially modify this project, you must **rename your fork** — see [TRADEMARK.md](./TRADEMARK.md) for the policy.
+
+In short:
+
+> ✅ Use Zaude on your projects · ✅ Fork & customize · ✅ Contribute back · ✅ Describe your project as *"built on Zaude"*
+>
+> 🚫 Don't name a fork "Zaude" · 🚫 Don't claim you built Zaude · 🚫 Don't register "Zaude" as a trademark
+
+This is the same model Rust, Python, Linux, and Kubernetes all use: permissive code license + protected name. The trademark policy exists to keep the Zaude name trustworthy for the people who rely on it — not to restrict legitimate use.
 
 ---
 

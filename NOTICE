@@ -1,0 +1,21 @@
+Zaude Framework
+Copyright (c) 2026 Ziad Momen
+
+This product includes software developed at UltaHost
+(https://ultahost.com) by Ziad Momen, in collaboration with
+the Claude Code community.
+
+The Zaude framework is licensed under the MIT License (see LICENSE).
+
+"Zaude" is an unregistered trademark (TM) of Ziad Momen.
+See TRADEMARK.md for the trademark policy. The trademark is NOT
+covered by the MIT license — forks must rename.
+
+This project references and integrates with third-party agents
+and tools. Attribution for those is in README.md under "Credits".
+Their respective licenses govern their use.
+
+Attribution required in forks (under MIT):
+Retain the copyright notice in all source files. In a rebranded
+fork's README, state: "Built on Zaude by Ziad Momen."
+See TRADEMARK.md for details.

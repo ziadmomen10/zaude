@@ -15,5 +15,19 @@
 
   "recent_session_logs": 3,
 
-  "claude_config_path": "~/.claude"
+  "claude_config_path": "~/.claude",
+
+  "_comment_zaude_repo_path": "Absolute path to your local clone of the Zaude repo (github.com/ziadmomen10/zaude). Required only if you want to use /zaude-push or auto_sync. Leave empty to disable.",
+  "zaude_repo_path": "",
+
+  "_comment_auto_sync": "If true, SessionEnd hook auto-invokes zaude-sync.sh in non-interactive mode when a framework file (hook/command/pattern) was touched during the session. Always creates a PR, never commits to main directly. Default false — you have to explicitly opt in.",
+  "auto_sync": false,
+
+  "_comment_sync_private_markers": "Additional strings (beyond the default list in zaude-sync.sh) that should BLOCK a sync if found in added/changed content. Add anything specific to your org that must never leak into the public Zaude repo. Default list already includes common UltaHost markers; override or extend here.",
+  "sync_private_markers": [
+  ],
+
+  "_comment_sync_exclude": "Path patterns (relative to ~/.claude/ or $vault_path) that should never sync to Zaude even if they change. Example: ['hooks/my-private-hook.py']. Leave [] to sync all known framework targets.",
+  "sync_exclude": [
+  ]
 }

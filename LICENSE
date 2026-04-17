@@ -1,3 +1,17 @@
+Zaude is licensed under the MIT License (below).
+
+IMPORTANT — TRADEMARK NOTICE
+============================
+"Zaude" is an unregistered trademark (TM) of Ziad Momen. The trademark is
+NOT licensed under MIT and is NOT granted by this license. Forks and
+derivatives of this software MAY NOT use the name "Zaude" or the Zaude
+logo to describe themselves. See TRADEMARK.md for the full policy.
+
+In short: the code is free; the name is not. Rebranded forks are
+welcome, but must use a different name and attribute the origin as
+"Built on Zaude by Ziad Momen."
+
+================================================================
 MIT License
 
 Copyright (c) 2026 Ziad Momen

@@ -79,6 +79,24 @@ See [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md). Short version: be direct, be kin
 
 ---
 
+## Contributor agreement (read before your first PR)
+
+By opening a pull request against this repository, you agree to the following. There's no separate CLA to sign — opening the PR **is** the agreement.
+
+1. **Your contribution is licensed under MIT.** You retain copyright on the specific code you add; you grant Zaude and its users the right to use that code under the MIT license shown in [LICENSE](./LICENSE). You may not submit code you don't have the right to license.
+
+2. **The "Zaude" trademark remains with Ziad Momen.** Contributing code does not grant you any rights to the Zaude name, the Zaude logo, or related branding. See [TRADEMARK.md](./TRADEMARK.md).
+
+3. **You warrant your contribution is original** or properly attributed. If you're adapting code from another project, make sure its license is compatible with MIT and include attribution in your PR.
+
+4. **No implicit endorsement.** Being a contributor does not imply endorsement of your other projects, employer, or views by Zaude or Ziad Momen.
+
+This is the same model Linux, Rust, Python, and Kubernetes use. It's deliberately lightweight — the point is to keep the project safe to adopt, not to make contributing a paperwork exercise.
+
+If you're contributing on behalf of your employer, make sure your employer is okay with these terms before you submit.
+
+---
+
 ## Questions?
 
 Open a [discussion](https://github.com/ziadmomen10/zaude/discussions) — no PR needed. For bugs, file an [issue](https://github.com/ziadmomen10/zaude/issues) with reproduction steps.
