@@ -28,6 +28,15 @@
         "hooks": [
           {
             "type": "command",
+            "command": "python \"$HOME/.claude/hooks/current-state-freshness.py\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "bash \"$HOME/.claude/hooks/session-end-vault-sync.sh\"",
             "timeout": 30
           }

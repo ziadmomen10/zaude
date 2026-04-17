@@ -24,10 +24,12 @@ End-of-session wrap-up. Leaves both the project repo and the vault in a clean, d
    - Scan the conversation for pasted passwords, API keys, tokens, SSH keys
    - Report the first 4 and last 4 characters only, never the full value
    - Note which service each credential belongs to
-8. **Check GitHub for vault drift** before pushing: `git fetch origin && git status -sb` in the vault. If the remote has newer commits, STOP and ask the user to reconcile — never force-push.
-9. **Commit the vault** with message: `session $(date +%F): <short summary>`
-10. **Push the vault** to GitHub
-11. **Confirm final state** — run `git status` on both the project repo and the vault, report both are clean (or report exactly what's dirty and why it was left that way).
+8. **Regenerate the status-freshness block** — run `python ~/.claude/hooks/lib/regen-freshness.py` from the session's cwd. This mechanically parses today's session log for verified claims (`X/Y` ratios, `verified:` markers, `[x] verified:` checklist items, confidence words like `shipped` / `end-to-end` / `green`) and rewrites the `<!-- status-freshness -->` block at the top of `current-state.md`. If the session log doesn't exist yet, step 3 must have created it first.
+9. **Gate: validate the freshness block** — run `FRESHNESS_ENFORCE=1 python ~/.claude/hooks/current-state-freshness.py --check --cwd "$(pwd)"`. If exit code is non-zero, STOP — the block is missing/stale/malformed. The validator's stderr tells you exactly what to fix; usually re-run step 8. Do NOT commit the vault until this check passes. This is the actual gate, not the SessionEnd hook — Claude Code's SessionEnd events cannot block the session from committing, so the gate lives here in `/wrap`.
+10. **Check GitHub for vault drift** before pushing: `git fetch origin && git status -sb` in the vault. If the remote has newer commits, STOP and ask the user to reconcile — never force-push.
+11. **Commit the vault** with message: `session $(date +%F): <short summary>`
+12. **Push the vault** to GitHub
+13. **Confirm final state** — run `git status` on both the project repo and the vault, report both are clean (or report exactly what's dirty and why it was left that way).
 
 ## Gates
 

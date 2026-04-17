@@ -22,10 +22,23 @@ Config schema:
   "claude_config_path": "/home/user/.claude"
 }
 """
+import datetime
 import glob
 import json
 import os
 import sys
+
+# Put lib/ on sys.path so we can import the shared parser.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+
+from freshness_parse import (  # type: ignore  # noqa: E402
+    BLOCK_RE,
+    MAX_LOG_BYTES,
+    _strip_quotes,
+    parse_block_yaml,
+    read_capped,
+    sanitize_for_injection,
+)
 
 
 def load_config() -> dict:
@@ -76,12 +89,32 @@ def find_memory_dir(cwd: str, claude_config_path: str) -> str | None:
     return None
 
 
+PER_FILE_CAP = 1 * 1024 * 1024  # 1 MB per vault file — hard cap on any single read
+
+
 def read_file(path: str) -> str:
+    """Read with a per-file byte cap. Hostile/runaway files cannot blow up
+    additionalContext. Returns '' on any error."""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
-            return f.read()
+            return f.read(PER_FILE_CAP)
     except OSError:
         return ""
+
+
+def validate_path_contained(child: str, parent: str) -> bool:
+    """Return True iff child resolves inside parent (post-realpath).
+    Guards against config-driven traversal via cwd_to_project / vault_path."""
+    try:
+        child_abs = os.path.realpath(child)
+        parent_abs = os.path.realpath(parent)
+    except OSError:
+        return False
+    try:
+        common = os.path.commonpath([child_abs, parent_abs])
+    except ValueError:
+        return False
+    return common == parent_abs
 
 
 def dump_section(title: str, path: str) -> str:
@@ -89,6 +122,81 @@ def dump_section(title: str, path: str) -> str:
     if not body:
         return ""
     return f"\n## {title}\n\n{body}\n"
+
+
+def _latest_log_basename(sessions_dir: str) -> str | None:
+    if not os.path.isdir(sessions_dir):
+        return None
+    files = sorted(glob.glob(os.path.join(sessions_dir, "*.md")))
+    return os.path.basename(files[-1]) if files else None
+
+
+def _warning_injection(latest_log: str | None) -> str:
+    log_ref = f"sessions/{latest_log}" if latest_log else "the latest session log"
+    return (
+        "=== FRESHNESS WARNING ===\n"
+        "current-state.md has no valid status-freshness block, or the block is stale.\n"
+        f"DO NOT trust the Status paragraph in current-state.md without reading {log_ref} first.\n"
+        "Cross-check session logs before reporting any status claims.\n"
+        "=== END FRESHNESS WARNING ==="
+    )
+
+
+def _facts_injection(last_updated: str, latest_log: str | None, scenarios) -> str:
+    # Sanitize every value that gets prepended to additionalContext — prevents
+    # prompt injection via claim/name fields reaching Claude as instructions.
+    safe_updated = sanitize_for_injection(last_updated)
+    safe_log = sanitize_for_injection(latest_log) if latest_log else ""
+    lines = [f"=== VERIFIED FACTS (last_updated {safe_updated}) ==="]
+    if safe_log:
+        lines.append(f"Source: sessions/{safe_log}")
+    lines.append("")
+    if isinstance(scenarios, list) and scenarios:
+        for s in scenarios:
+            if not isinstance(s, dict):
+                continue
+            name = sanitize_for_injection(s.get("name"))
+            claim = sanitize_for_injection(s.get("claim"))
+            if name and claim:
+                lines.append(f"- {name}: {claim}")
+    else:
+        lines.append("- (no scenarios recorded)")
+    lines.append("")
+    lines.append("=== END VERIFIED FACTS ===")
+    return "\n".join(lines)
+
+
+def freshness_injection(state_path: str, sessions_dir: str) -> str:
+    if not os.path.isfile(state_path):
+        return ""
+    text = read_capped(state_path, MAX_LOG_BYTES)
+    if not text:
+        return ""
+
+    latest_log = _latest_log_basename(sessions_dir)
+    match = BLOCK_RE.search(text)
+    if not match:
+        return _warning_injection(latest_log)
+
+    data, _ = parse_block_yaml(match.group(1))
+    if not isinstance(data, dict):
+        return _warning_injection(latest_log)
+
+    last_updated = _strip_quotes(str(data.get("last_updated") or "").strip())
+    try:
+        block_date = datetime.date.fromisoformat(last_updated)
+    except (ValueError, TypeError):
+        return _warning_injection(latest_log)
+
+    if latest_log:
+        try:
+            log_date = datetime.date.fromisoformat(latest_log[:10])
+            if block_date < log_date:
+                return _warning_injection(latest_log)
+        except ValueError:
+            pass
+
+    return _facts_injection(last_updated, latest_log, data.get("verified_scenarios") or [])
 
 
 def main() -> int:
@@ -130,7 +238,22 @@ def main() -> int:
         return 0
 
     vault_dir = os.path.join(vault_root, project)
-    parts: list[str] = [f"=== VAULT CONTEXT FOR {project} ==="]
+
+    # Path containment guard — prevents config-driven traversal via
+    # vault_path / projects_subdir / cwd_to_project mappings.
+    if not validate_path_contained(vault_dir, vault_path):
+        print("{}")
+        return 0
+
+    sessions_dir_probe = os.path.join(vault_dir, "sessions")
+    state_path_probe = os.path.join(vault_dir, "current-state.md")
+
+    parts: list[str] = []
+    freshness = freshness_injection(state_path_probe, sessions_dir_probe)
+    if freshness:
+        parts.append(freshness)
+    parts.append(f"=== VAULT CONTEXT FOR {project} ===")
+    header_count = len(parts)
 
     # Core vault files (fixed names)
     for filename, title in [
@@ -190,7 +313,7 @@ def main() -> int:
                 )
             )
 
-    if len(parts) == 1:
+    if len(parts) == header_count:
         print("{}")
         return 0
 
