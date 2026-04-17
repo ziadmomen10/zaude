@@ -4,6 +4,35 @@ All notable changes to Zaude are documented here. This project follows [Keep a C
 
 ---
 
+## [0.2.0] — 2026-04-17
+
+### Added
+- **Trademark protection:**
+  - `TRADEMARK.md` — full trademark policy (permitted / restricted / prohibited uses, fork-rename requirements, enforcement, contact). Modeled on Rust / Python / Linux / Kubernetes.
+  - `NOTICE` — mandatory attribution under MIT.
+  - `LICENSE` preamble clarifying Zaude™ is an unregistered trademark separate from the MIT code license.
+  - `README` trademark badge + expanded license/trademark section + forks-must-rename clause.
+  - `CONTRIBUTING.md` contributor agreement (CLA-lite: opening a PR grants MIT to code; trademark stays with Ziad Momen).
+- **Auto-sync machinery (PR-only, never direct to main):**
+  - `install/zaude-sync.sh` — 8-phase sync pipeline: stage → diff against `origin/main` → genericization lint on added lines → branch → commit → push → open PR via `gh`. Supports `--dry-run`, `--lint-only`, `--yes` modes.
+  - `templates/claude-config/commands/zaude-push.md` — new `/zaude-push` slash command with Claude-supervised lint → preview → confirm → push flow.
+  - Extended `templates/claude-config/hooks/session-end-vault-sync.sh` with `auto_sync` config flag. When true, fires `zaude-sync.sh --yes` automatically when a session's auto-commit touches a framework file. Still PR-only.
+  - New config fields in `config.sample.json`: `zaude_repo_path`, `auto_sync`, `sync_private_markers`, `sync_exclude`.
+- **`docs/14-auto-sync.md`** — full architecture walkthrough, genericization lint semantics, three ways to run it, worked examples for both clean and lint-failure cases, safety properties, disabling procedure.
+
+### Fixed
+- `config.sample.json` was unintentionally excluded from git tracking by the nested `templates/claude-config/.gitignore` — added to allowlist (`2d453f3`).
+- Python on Windows can't open Git Bash `/c/...` paths. Normalized via `cygpath -m` before Python invocation in `zaude-sync.sh` and `session-end-vault-sync.sh` (`9942d17`).
+- Python `print()` on MSYS pipes adds `\r\n` — strip trailing `\r` when populating `SYNC_EXCLUDE` array so substring match works (`9942d17`).
+- Shell-quote escaping in Python heredocs replaced with environment-variable passing for config path + field (`9942d17`).
+
+### Design decisions in this release
+- Auto-sync is PR-only forever. Direct push to `main` is rejected at the architecture level, not as a config option.
+- Genericization lint runs on the ADDED lines of the diff, not the full file — legitimate marker-shaped content already on `main` doesn't block future syncs.
+- The trademark is unregistered (common-law) for now. USPTO registration deferred until adoption warrants it.
+
+---
+
 ## [0.1.0] — 2026-04-17
 
 Initial public release.
