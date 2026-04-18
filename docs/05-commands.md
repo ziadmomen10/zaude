@@ -1,6 +1,6 @@
 # 05 — Slash commands
 
-Zaude ships five slash commands. They're the primary interface: if a command covers your workflow, use it rather than freestyling with prompts. This doc covers each command in depth — what it does, when to use it, the agent chain under the hood, the gates that stop it, and a realistic example session.
+Zaude ships six slash commands. They're the primary interface: if a command covers your workflow, use it rather than freestyling with prompts. This doc covers each command in depth — what it does, when to use it, the agent chain under the hood, the gates that stop it, and a realistic example session.
 
 ---
 
@@ -11,6 +11,7 @@ Zaude ships five slash commands. They're the primary interface: if a command cov
 | `/start` | Report where you left off | No | No | No | No |
 | `/build <desc>` | Plan → design → implement → review | Yes (orchestrator + design + reviewers) | No | No | No |
 | `/review` | Read-only review of uncommitted diff | Yes (code / architect / security) | No | No | No |
+| `/decision-map <question>` | Structured analysis of a stuck technical decision | Yes (architect-review + one specialist max) | No (print-only draft blocks) | No | No |
 | `/ship` | Review → commit → push → vault update | Yes (full review chain) | Yes (current-state, sessions, decisions) | Yes (project + vault) | Yes (project + vault) |
 | `/wrap` | End-of-session housekeeping | Yes (code-reviewer only) | Yes (current-state, sessions, decisions, open-questions) | Yes (vault) | Yes (vault) |
 
@@ -342,6 +343,200 @@ but actually checks for malformed token.
 
 ---
 
+## `/decision-map <question>` — structured analysis of a stuck technical decision
+
+### What it does
+
+You're stuck between two (or more) technical options. `/decision-map` reads the vault for precedent, enumerates the options honestly, scores them on the five criteria that actually matter (reversibility, blast radius, impl cost, hard-rule compliance, primary risk), invokes `architect-review` in DESIGN mode and at most one specialist agent, and produces a structured recommendation with explicit confidence and a rollback plan.
+
+It is **read-only**: never writes to `decisions.md`, never auto-appends to `open-questions.md`, never commits. The output is a markdown report you copy from.
+
+### When to use it
+
+- You're about to make a structural choice and the vault has no precedent
+- You're about to re-open a settled decision and want to pressure-test the move first
+- You asked yourself "should I use A or B?" and the honest answer is "I don't know"
+- You want a second read on a choice you're leaning toward (anti-sycophancy is a design goal — if your named option is wrong, the command says so)
+
+Do **not** use it for: product decisions, timing decisions, hiring decisions, or any non-technical decision. The scope classifier will refuse those outright.
+
+### Under the hood
+
+```mermaid
+flowchart TD
+    A["/decision-map &lt;question&gt;"] --> B[Step 0: scope classifier]
+    B --> C{Technical?<br/>Not settled?<br/>Vault has context?}
+    C -->|No| D[REFUSE<br/>with specific output]
+    C -->|Yes| E[Step 1: classify type<br/>security override on auth tokens]
+    E --> F[Step 2: vault precedent scan<br/>from context, no disk reads]
+    F --> G[Step 3: enumerate options<br/>alphabetical order, no filler]
+    G --> H[Step 4: architect-review DESIGN mode]
+    H --> I{Classification<br/>needs specialist?}
+    I -->|security/auth/data| J[security-auditor]
+    I -->|perf| K[performance-engineer]
+    I -->|test/refactor| L[test-automator]
+    I -->|structural/other| M[Skip specialist]
+    J --> N[Step 5-7: score, self-check,<br/>calibrate confidence]
+    K --> N
+    L --> N
+    M --> N
+    N --> O[Step 8: emit map<br/>NO FILE WRITES]
+
+    style B fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+    style H fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+    style J fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+    style K fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+    style L fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+```
+
+> **Note on the dispatch branches above.** The flowchart shows the unconditional dispatches. The full matrix in the skill file is conditional for `data`, `api`, `refactor`, and `dependency` — e.g. a `data` decision only dispatches `security-auditor` when the schema includes PII/auth/credentials/tokens; a `refactor` only dispatches `test-automator` when it crosses module boundaries or touches >10 files. See the dispatch matrix in `templates/claude-config/commands/decision-map.md` for the authoritative conditions.
+
+The nine steps (0 through 8):
+
+0. **Scope classifier** — refuses product/process/people decisions, already-settled decisions (without `--revisit`), and cases where vault context is too thin. Prompt-level judgment, zero agent calls.
+1. **Classify decision type** — one of `structural | data | api | security | perf | test | refactor | dependency | other`. **Security override:** tokens `auth`, `token`, `password`, `crypto`, `ssh`, `credential`, `secret`, `session`, `jwt`, `oauth`, `encryption` force `security` regardless. (Authoritative list lives in the skill file; update it there first.)
+2. **Vault precedent scan** — reads from already-loaded context (`decisions.md`, `open-questions.md`, `CLAUDE.md`, `spec.md`). Surfaces up to 3 closest prior decisions. If precedent contradicts the user's phrasing, it leads.
+3. **Enumerate options** — user-named + "do nothing" + "defer with concrete trigger" + at most one hybrid. Refuses filler. Presented alphabetically by assigned name to neutralize phrasing bias.
+4. **Specialist dispatch** — `architect-review` DESIGN always, plus at most one specialist sequentially (never parallel, hard cap of two agents).
+5. **Score** — five load-bearing criteria always + up to three situational (user impact, maintenance burden, migration safety).
+6. **Anti-sycophancy self-check** — asks: did I pick this because the user named it first? Am I hedging to avoid contradicting them?
+7. **Confidence calibration** — `high` requires precedent-agrees AND hard-rules-unambiguous AND low-to-medium risk. Skipped specialist caps confidence at `medium`. `--force` (insufficient-context bypass) and `--revisit` with a thin rationale both cap confidence at `low`. Caps stack; the lowest ceiling wins. See the skill file for the full stacking rules.
+8. **Emit** — read-only. `--draft-decision` flag adds a pre-formatted `decisions.md` entry block to the output, still print-only.
+
+### Arguments
+
+- `$ARGUMENTS` — the decision question
+- `--revisit` — bypass the "already-settled" refusal. Requires a rationale clause in the question (signal words: `because`, `since`, `now that`, `new constraint`, `new information`, `changed`, `different`, `no longer`, `has fired`).
+- `--force` — bypass the "insufficient context" refusal. Confidence is automatically capped at `low`.
+- `--draft-decision` — include a pre-formatted `decisions.md` entry block in the output (still print-only)
+
+### Gates
+
+- `$ARGUMENTS` empty → stop, emit usage
+- Scope classifier flags non-technical decision → refuse, do not analyze
+- `decisions.md` has settled entry and `--revisit` not passed → refuse, surface the prior entry
+- Vault context too thin → refuse with list of missing pieces
+- Every option FAILs on hard-rule compliance → stop, tell the user the option space is empty under current constraints
+- Specialist agent errors or not installed → degrade gracefully (partial map + flag missing dimension), never halt
+- **NEVER writes to `decisions.md`** — that file is human-authored, append-only
+- **NEVER auto-appends to `open-questions.md`** — draft block is printed only
+
+### Composition with other commands
+
+- **`/build`** does not auto-invoke `/decision-map`. If `workflow-orchestrator` surfaces an ambiguous architectural choice during `/build`, it may suggest `/decision-map <question>` in its plan output. The user decides whether to break off.
+- **`/review`** and **`/decision-map`** have no interaction — different time slots (post-facto code vs. pre-facto question).
+- **`/ship`** may mention `/decision-map` in reviewer remediation advice when a finding is architectural rather than a defect. Not automated.
+- **`/wrap`** does not currently wire an automatic prompt for decisions adopted from `/decision-map`. If you adopt a recommendation this session, add the entry to `decisions.md` yourself before `/wrap` runs its "append decisions" step. A future release may wire this handshake explicitly.
+
+### Example
+
+```
+You: /decision-map should the rate limiter move to Redis or stay in-memory?
+
+Claude:
+## Decision: Should the rate limiter move to Redis or stay in-memory?
+
+**Classification:** perf
+**Analyzed by:** architect-review, performance-engineer
+
+---
+
+### Context
+The forgot-password endpoint has an in-memory rate-limit counter that resets on dyno restart.
+We're currently on 1 dyno. The question is whether to move to Redis (distributed, persistent)
+or accept the in-memory limitation.
+
+**Hard rules that apply:**
+- "No shortcuts that trade production quality for speed" (CLAUDE.md) — constrains any option
+  that knowingly leaves a security gap in production.
+
+**Precedent in vault:**
+- 2026-04-15 decisions.md: "Stay on in-memory rate limiter for now." Rationale: single dyno,
+  Redis adds complexity for negligible value. Revisit when we scale past 1 dyno. — relevance:
+  directly on point; this is a revisit.
+
+**Related open questions:**
+- Q4 (LOW): "When we scale past 1 dyno, do we use Upstash Redis or self-host?" — bundling
+  opportunity: yes, answering this decision answers Q4.
+
+---
+
+### Options
+(Presented alphabetically by name, not in your phrasing order.)
+
+**A — In-memory (status quo)**
+Keep the Map-based counter. Resets on every dyno restart. Zero ops cost, zero dependencies.
+
+**B — Self-hosted Redis**
+Run Redis as a Heroku add-on or on the same VPS. Fixed monthly cost, we manage failover.
+
+**C — Upstash Redis (managed)**
+Serverless Redis at Upstash. Per-request pricing, no ops burden, global replication. ~$0.20/1000
+requests at our volume.
+
+**Defer**
+Trigger to revisit: when we add the second dyno. Cost of deferring: attackers can currently
+reset the rate-limit by forcing a dyno restart (low exploitability today, 1 dyno = rare).
+
+---
+
+### Analysis
+
+| Criterion | A (In-memory) | B (Self-hosted) | C (Upstash) | Defer |
+|---|---|---|---|---|
+| Reversibility | 2-way | 1-way (migration cost) | 2-way | 2-way |
+| Blast radius | S (0 files changed) | L (infra + 1 service) | M (1 service + envs) | — |
+| Impl cost | 0 | ~1d | ~3h | 0 |
+| Hard-rule compliance | TRADEOFF (rate limit bypassable on restart) | PASS | PASS | TRADEOFF (same as A) |
+| Primary risk | Attacker abuses restart timing (low, 1 dyno) | Redis ops burden falls on us | Upstash outage = no rate limiting | Pressure builds if we scale unexpectedly |
+
+---
+
+### Recommendation
+
+**Defer** (confidence: medium)
+
+**Why:** Precedent from 2026-04-15 is directly on point and the underlying facts haven't changed
+— we're still on 1 dyno and the exploit window is narrow. Blast radius on A/B/C is real; the
+cost of waiting is low.
+
+**Primary tradeoff:** You accept continued theoretical exposure until you scale. The window is
+narrow (1 dyno, restart-timing-dependent), but it is non-zero.
+
+**Taste / principles note:** I weighted the "don't add infrastructure you don't yet need" signal
+from the 2026-04-15 decision. If you're optimizing for a future multi-dyno world, C is the clear
+answer — but you're not there yet.
+
+**Rollback plan:** If you adopt Defer and hit an abuse incident, switch to C (Upstash) in ~3h
+via an env-var toggle and a deploy. No data migration required.
+
+**Revisit trigger:** Second dyno is provisioned, OR a rate-limit abuse incident is reported.
+
+---
+
+### Draft entry for open-questions.md
+
+## Q6 — Rate limiter: when we scale past 1 dyno, Upstash or self-host? (LOW, revisit trigger: second dyno)
+
+**What:** In-memory rate limiter is acceptable on 1 dyno. When we scale, pick Upstash or self-host.
+**Why it matters:** Dyno restart currently lets an attacker reset the counter. Low exploitability on 1 dyno; high on N dynos with load balancing.
+**Options:**
+1. Upstash Redis (managed, ~$0.20/1000 req)
+2. Self-hosted Redis (Heroku addon or VPS)
+**Recommended:** Upstash. No ops burden; cost is marginal; one-way switch is cheap to reverse later.
+
+---
+
+### Note on what I did NOT do
+
+- I did NOT write to decisions.md.
+- I did NOT commit anything.
+- I did NOT append to open-questions.md (the draft block above is for you to copy).
+- Options are presented alphabetically by assigned name, not in the order you named them.
+```
+
+---
+
 ## `/ship` — the shipping workflow
 
 ### What it does
@@ -599,6 +794,7 @@ The full list of things that STOP each command. Useful to skim before you run on
 | `/start` | Missing vault context → reports diagnostic, doesn't recover |
 | `/build` | Orchestrator flags feature as blocked; design-bridge finds DESIGN.md violation; any reviewer returns CRITICAL or HIGH |
 | `/review` | Never stops — always reports |
+| `/decision-map` | Empty question; scope classifier rejects non-technical; settled decision without `--revisit`; vault context too thin; every option FAILs hard-rule compliance |
 | `/ship` | Reviewer CRITICAL or HIGH; pre-commit hook failed; project push rejected; vault has unrelated changes; vault remote has newer commits |
 | `/wrap` | code-reviewer returns CRITICAL or HIGH on uncommitted work; vault remote has newer commits |
 
@@ -640,5 +836,6 @@ See also the source of each command:
 - [`start.md`](../templates/claude-config/commands/start.md)
 - [`build.md`](../templates/claude-config/commands/build.md)
 - [`review.md`](../templates/claude-config/commands/review.md)
+- [`decision-map.md`](../templates/claude-config/commands/decision-map.md)
 - [`ship.md`](../templates/claude-config/commands/ship.md)
 - [`wrap.md`](../templates/claude-config/commands/wrap.md)

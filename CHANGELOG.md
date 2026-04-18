@@ -4,6 +4,42 @@ All notable changes to Zaude are documented here. This project follows [Keep a C
 
 ---
 
+## [Unreleased]
+
+### Added
+- **`/decision-map <question>`** — sixth slash command for structured analysis of stuck technical decisions. Read-only by design: never writes to `decisions.md`, never auto-appends to `open-questions.md`, never commits.
+  - `templates/claude-config/commands/decision-map.md` (NEW) — skill file with 9-step workflow (Step 0 scope classifier → type classification with security-token override → vault precedent scan → option enumeration → specialist dispatch → scoring → anti-sycophancy self-check → confidence calibration → read-only emit).
+  - `docs/05-commands.md` — new section documenting the command, mermaid flow, gates, composition with other commands, and a realistic worked example (rate-limiter decision re-litigation).
+- **Anti-sycophancy primitives** baked into `/decision-map`:
+  - Options presented alphabetically by assigned name, not in the user's phrasing order.
+  - Mandatory pre-emit self-check for "am I rubber-stamping what the user named first?".
+  - Refuses to invent filler options when only one or two sane options exist.
+- **Specialist dispatch matrix** for `/decision-map` — `architect-review` DESIGN mode always, plus at most one conditional specialist (`security-auditor` / `performance-engineer` / `test-automator`) sequentially. Hard cap of two agents per invocation; third-dimension gap surfaced explicitly in the output.
+- **Five refusal outputs** for `/decision-map`:
+  - Empty arguments → usage hint with examples
+  - Non-technical decision in disguise → scope refusal
+  - Already-settled decision without `--revisit` (or `--revisit` without a detectable rationale clause) → surface prior entry, require rationale
+  - Insufficient vault context → list missing pieces; explicit `--force` flag required to override
+  - Every option fails hard-rule compliance → tell the user the option space is empty; ask whether to propose a new option or override a rule
+- **Three flags** for `/decision-map`:
+  - `--revisit` bypasses the settled-decision refusal when a rationale clause is detected in the question (mechanical check for signal words: `because`, `since`, `now that`, `new constraint`, `changed`, etc.).
+  - `--force` bypasses the insufficient-context refusal; confidence is automatically capped at `low`.
+  - `--draft-decision` includes a pre-formatted `decisions.md` entry block in the output (print-only, never writes).
+
+### Design decisions in this release
+- **`/decision-map` never writes to `decisions.md`.** That file is human-authored and append-only. If the command could write to it, precedent would contain AI-generated entries the user didn't actually decide — poisoning every future `/decision-map` run. Hard architectural guarantee, not a config option.
+- **Sequential agent dispatch, not parallel.** Parallel `Skill`-dispatched agents produce interleaved output that's hard to attribute; 80% of decisions only need one specialist anyway. Parallel fan-out is deferred to v1.1 if real-world usage shows latency problems.
+- **Dropped "strategic fit" as a scoring criterion.** Either it's objective hard-rule compliance (in the table) or it's taste (in a named "Taste / principles" recommendation line). Averaging the two produced hand-wavy scores that hid the judgment call.
+- **Five load-bearing criteria, not eight.** Decision fatigue is the failure mode the command is designed to prevent — `/decision-map` cannot itself be a source of it. Situational criteria (user impact, maintenance burden, migration safety) appear only when they change the answer.
+- **Confidence calibration is gated, not free-form.** `high` requires precedent-agrees AND unambiguous hard rules AND low-to-medium risk. Any skipped specialist caps confidence at `medium`. Prevents over-confident recommendations on thin analysis.
+- **`/build` does NOT auto-invoke `/decision-map`.** Auto-invocation creates a workflow loop (orchestrator surfaces ambiguity → decision-map runs → user picks → build resumes — four steps where one direct question would do). Users reach for the command themselves; `workflow-orchestrator` may *suggest* it in its plan output.
+
+### Verified
+- Design reviewed in DESIGN mode by `architect-review` before implementation; raised concerns were incorporated or explicitly resolved before the skill file was written (scoring-criteria reduction from 8 → 5 load-bearing + 3 situational, sequential specialist dispatch vs parallel fan-out, dropped "strategic fit" as a scoring criterion, added Step 0 scope classifier, added mandatory anti-sycophancy pre-emit gate).
+- Implementation reviewed by `code-reviewer` + `architect-review` REVIEW mode before commit; findings addressed in-place across CRITICAL, HIGH, and MEDIUM severities (alphabetical-ordering bug in worked example, mechanical `--revisit` rationale check, `--force` flag for insufficient-context opt-in, gate predicate corrections, docs/skill alignment on situational criteria and `/wrap` composition). Remaining LOW-severity polish items tracked separately.
+
+---
+
 ## [0.3.0] — 2026-04-17
 
 ### Added
