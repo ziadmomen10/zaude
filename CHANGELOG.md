@@ -8,6 +8,12 @@ All notable changes to Zaude are documented here. This project follows [Keep a C
 
 ### Added
 
+#### CI — GitHub Actions 3-OS matrix
+
+- **`.github/workflows/ci.yml`** (NEW) — syntax-checks matrix on `ubuntu-latest` + `macos-latest` + `windows-latest`. Covers Python stdlib compile on all hook `.py` files, bash parse on `install/install.sh` + `install/zaude-sync.sh` + `session-end-vault-sync.sh`, PowerShell parser on `install.ps1` (Windows leg only), and `json.load` validation across all tracked `.json` files. `concurrency` cancels superseded runs on the same ref. `fail-fast: false` so all OS legs run even if one fails.
+- **CI badge in `README.md`** — first in the badge row, linked to the Actions tab. Signals live build status on the public repo.
+- **Decision rationale:** adopted per `/decision-map` analysis of `open-questions.md` Q4 — minimal 3-OS matrix chosen over extended multi-Ubuntu variant because `ubuntu-latest` auto-tracks LTS at lower maintenance burden and the shell-compat risk surface (Git Bash/MSYS on Windows) is already covered by `windows-latest`. Resolves Q4; unblocks Q1 (public-flip).
+
 #### `/e2e-test` — seventh slash command
 
 - **`/e2e-test`** — production-readiness gate. Runs every applicable testing layer (types, lint, format, unit, integration, e2e, build, dep-audit, secret-scan, prod-checklist, plus opt-in a11y / perf / license on `--profile=deep`), computes increment-fit analysis against a git ref, dispatches 2 always-on + up to 3 conditional specialist agents, and produces a **SHIP / SHIP-WITH-CAUTION / HOLD** verdict. Manual-invocation only (5–45 min depending on profile). Never commits, never pushes, never modifies source files (carve-outs documented in Gates).

@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  syntax-checks:
+    name: Syntax checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Python syntax check (stdlib hooks)
+        shell: bash
+        run: |
+          set -e
+          find templates/claude-config/hooks -name '*.py' -print0 | xargs -0 python -m py_compile
+          echo "OK: all hook .py files compile"
+
+      - name: Bash syntax check (install scripts + sync hook)
+        shell: bash
+        run: |
+          set -e
+          for f in install/install.sh install/zaude-sync.sh templates/claude-config/hooks/session-end-vault-sync.sh; do
+            bash -n "$f"
+            echo "OK: $f"
+          done
+
+      - name: PowerShell parser check (install.ps1)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.PSParser]::Tokenize(
+            (Get-Content -Raw install/install.ps1), [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            Write-Error "install.ps1 has parse errors:"
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          Write-Output "OK: install.ps1 parses cleanly"
+
+      - name: JSON validation (all tracked .json files)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, sys
+          from pathlib import Path
+
+          failed = []
+          for p in Path('.').rglob('*.json'):
+              if any(seg in ('node_modules', '.git', '.zaude') for seg in p.parts):
+                  continue
+              try:
+                  json.loads(p.read_text(encoding='utf-8'))
+                  print(f"OK: {p}")
+              except Exception as e:
+                  failed.append((str(p), str(e)))
+
+          if failed:
+              print("\nFAIL:", file=sys.stderr)
+              for p, e in failed:
+                  print(f"  {p}: {e}", file=sys.stderr)
+              sys.exit(1)
+
+          print("\nAll JSON files valid.")
+          PY

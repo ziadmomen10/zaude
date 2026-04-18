@@ -8,6 +8,7 @@
 
 **A Claude Code framework for people who ship to production.**
 
+[![CI](https://github.com/ziadmomen10/zaude/actions/workflows/ci.yml/badge.svg)](https://github.com/ziadmomen10/zaude/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/License-MIT-5e6ad2.svg)](./LICENSE)
 [![Trademark](https://img.shields.io/badge/Zaude-%E2%84%A2-8a8f98.svg)](./TRADEMARK.md)
 [![Version 0.3.0](https://img.shields.io/badge/version-0.3.0-5e6ad2.svg)](./CHANGELOG.md)
