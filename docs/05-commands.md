@@ -493,6 +493,28 @@ reset the rate-limit by forcing a dyno restart (low exploitability today, 1 dyno
 
 ---
 
+### Draft entry for open-questions.md
+
+## Q6 — Rate limiter: when we scale past 1 dyno, Upstash or self-host? (LOW, revisit trigger: second dyno)
+
+**What:** In-memory rate limiter is acceptable on 1 dyno. When we scale, pick Upstash or self-host.
+**Why it matters:** Dyno restart currently lets an attacker reset the counter. Low exploitability on 1 dyno; high on N dynos with load balancing.
+**Options:**
+1. Upstash Redis (managed, ~$0.20/1000 req)
+2. Self-hosted Redis (Heroku addon or VPS)
+**Recommended:** Upstash. No ops burden; cost is marginal; one-way switch is cheap to reverse later.
+
+---
+
+### Note on what I did NOT do
+
+- I did NOT write to decisions.md.
+- I did NOT commit anything.
+- I did NOT append to open-questions.md (the draft block above is for you to copy).
+- Options are presented alphabetically by assigned name, not in the order you named them.
+
+---
+
 ### Recommendation
 
 **Defer** (confidence: medium)
@@ -513,28 +535,44 @@ via an env-var toggle and a deploy. No data migration required.
 
 **Revisit trigger:** Second dyno is provisioned, OR a rate-limit abuse incident is reported.
 
----
-
-### Draft entry for open-questions.md
-
-## Q6 — Rate limiter: when we scale past 1 dyno, Upstash or self-host? (LOW, revisit trigger: second dyno)
-
-**What:** In-memory rate limiter is acceptable on 1 dyno. When we scale, pick Upstash or self-host.
-**Why it matters:** Dyno restart currently lets an attacker reset the counter. Low exploitability on 1 dyno; high on N dynos with load balancing.
-**Options:**
-1. Upstash Redis (managed, ~$0.20/1000 req)
-2. Self-hosted Redis (Heroku addon or VPS)
-**Recommended:** Upstash. No ops burden; cost is marginal; one-way switch is cheap to reverse later.
-
----
-
-### Note on what I did NOT do
-
-- I did NOT write to decisions.md.
-- I did NOT commit anything.
-- I did NOT append to open-questions.md (the draft block above is for you to copy).
-- Options are presented alphabetically by assigned name, not in the order you named them.
+**Reply `go` to adopt Defer. Reply `go with <letter-or-name>` to adopt a different option, or redirect with a new constraint to re-analyze.**
 ```
+
+### Post-recommendation behavior
+
+The Recommendation is always the **last** section of the output — that's where the user's eye lands. The adoption signal is invited at the close of the Recommendation section and fires on the user's **very next reply turn**.
+
+#### Adoption signals — strict token match
+
+Case-insensitive, whitespace-trimmed, trailing punctuation stripped. Must be the **entire reply** — nothing else.
+
+| Reply (entire message, case-insensitive) | Behavior |
+|---|---|
+| `go`, `yes`, `approved`, `implement it` | Adopt the **recommended option**. Start implementing (or acknowledge, if the recommendation is Defer — see Defer special case). |
+| `go with <X>` (X is a letter A/B/C/... or option name, including `Defer`; case-insensitive) | Adopt **option X**. If X is the recommendation, identical to bare `go`. If X differs — including `go with defer` on a non-Defer recommendation — adopt X instead (triggers the Defer special case if X is Defer). |
+| `no`, `reject`, `try again`, `revisit with <new constraint>` | Do NOT implement. Wait for new direction. |
+| Anything else (including `go check the README`, `yes but option A`, `proceed`, `ship it`, `do it`, `adopt <X>`) | Wait. `proceed`/`ship it`/`do it` are explicitly NOT in the adoption set because they collide with Zaude's destructive-action closer and `/ship` command. `adopt <X>` is also NOT in the set — `go with <X>` is the single canonical named-adoption form. |
+
+#### Scope rule — turn-adjacent only
+
+The adoption signal fires ONLY if the user's reply is the **very next user turn** after the `/decision-map` emit. Any intervening user turn — even a clarifying question like "what does blast radius mean here?" — closes the adoption window. A later `go` is ambiguous; Claude asks what it refers to.
+
+This means: if you want to ask a clarifying question and then adopt, you need to re-confirm after the clarification. A bare `go` after an intervening turn is no longer an adoption signal — Claude will ask what the `go` refers to before proceeding.
+
+#### Defer special case
+
+When the adopted option is **Defer** (as the recommendation or a named alternative), there is no implementation. Claude acknowledges the defer, prints the revisit trigger from the Draft entry for `open-questions.md`, and does NOT write to disk. User copies the Q&lt;N&gt; block manually per the file-writes prohibition.
+
+#### Two-step authorization
+
+| Step | What authorizes it |
+|---|---|
+| Implementation (code/doc changes) | Adoption signal (`go`, etc.) after `/decision-map` output |
+| Commit + push | `/ship` invocation, OR explicit `commit` / `commit and push` request |
+
+A second `go` after implementation completes is NOT an adoption signal — the scope window closed when implementation started. Claude asks for commit intent explicitly.
+
+Implementation runs under `/build` semantics: non-trivial work invokes `architect-review` DESIGN mode + `code-reviewer` + specialists per `/build` trigger rules; trivial work skips to direct implementation.
 
 ---
 

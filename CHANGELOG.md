@@ -6,6 +6,22 @@ All notable changes to Zaude are documented here. This project follows [Keep a C
 
 ## [Unreleased]
 
+### Changed
+
+#### `/decision-map` — recommendation-at-end + `go` adoption contract
+
+- **Output restructured.** The **Recommendation** is now the final section of the report — after Context, Options, Analysis, draft entries for `open-questions.md` / `decisions.md`, and the "what I did NOT do" note. Rationale: the user's eye should land on the recommendation as the closing line, because that's where the action signal is. Section names and contents are unchanged; only position moved.
+- **Breaking for position-dependent consumers.** If any downstream habit or script keyed on "Recommendation is the middle section of `/decision-map` output," it now appears last. No other structural changes.
+- **Adoption signals — strict token match, mechanical.** The report now closes with an explicit invitation: `Reply `go` to start implementing Option X. Reply `go with <letter-or-name>` to adopt a different option, or redirect with a new constraint to re-analyze.` Signal recognition is deliberately narrow to avoid collisions with other Zaude workflow tokens:
+  - **Bare adoption:** `go`, `yes`, `approved`, `implement it`. Must be the entire user reply (whitespace-trimmed, trailing punctuation stripped, case-insensitive).
+  - **Named adoption:** `go with <X>` where X is a letter (A/B/C/…) or the full option name including `Defer`. Option-identifier match is case-insensitive. `adopt <X>` is deliberately NOT in the signal set — `go with <X>` is the single canonical named-adoption form.
+  - **Rejection:** `no`, `reject`, `try again`, `revisit with <constraint>` → wait for new direction.
+  - **Anything else, including hedged replies (`yes but option A`, `go check the README`):** wait. Explicitly NOT in the adoption set: `proceed`, `ship it`, `do it` — these collide with Zaude's destructive-action announcement closer (`Proceeding in one beat…`), the `/ship` command name, and ambiguous colloquial use.
+- **Scope — turn-adjacent only.** Adoption signal fires ONLY when the user's reply is the very next user turn after the `/decision-map` emit. Any intervening user turn — clarifying question, other slash command, anything — closes the window. A later `go` is no longer adoption; Claude asks what it refers to.
+- **Defer special case.** Adopting Defer means: acknowledge, print the revisit trigger (already in the report's Draft entry block), and do NOT write to disk. Per the file-writes prohibition, the user copies the Q&lt;N&gt; block manually.
+- **Two-step authorization.** Adoption authorizes the work, not the ship. Implementation runs under `/build` semantics (`architect-review` DESIGN + `code-reviewer` + specialists per trigger rules). Commits still require `/ship` or an explicit `commit` request. A second `go` after implementation completes is NOT an adoption signal — scope window closed.
+- **Composition rule added.** The `/decision-map → /build` handshake on adoption is documented in the skill's Composition section alongside the pre-existing `/build → /decision-map` suggestion (suggestion only, never auto-invoked).
+
 ### Added
 
 #### CI — GitHub Actions 3-OS matrix

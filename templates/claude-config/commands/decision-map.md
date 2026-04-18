@@ -151,11 +151,14 @@ If `--draft-decision` was passed, append a pre-formatted `decisions.md` entry bl
 ## Composition with other commands
 
 - **`/build`** does not auto-invoke `/decision-map`. If `workflow-orchestrator` surfaces an ambiguous architectural choice during `/build`, it may *suggest* `/decision-map <question>` in its plan output. The user decides whether to break off.
-- **`/review`** and **`/decision-map`** have no interaction. `/review` is post-facto on code; `/decision-map` is pre-facto on a question.
-- **`/ship`** has no direct interaction. Reviewer findings during `/ship` that raise architectural questions (not code defects) may suggest `/decision-map` as remediation; not automated.
+- **`/decision-map` → `/build` (on adoption).** When an adoption signal fires (see "Post-recommendation behavior"), Claude treats the work as an implicit `/build <recommended-option-description>`. Same review chain, same gates. The inverse direction (`/build` → `/decision-map`) is NOT wired; `/build` only suggests, never invokes.
+- **`/review`** and **`/decision-map`** have no interaction. `/review` is post-facto on code; `/decision-map` is pre-facto on a question. Invoking `/review` between the map emit and an adoption signal closes the adoption window — a later `go` is ambiguous.
+- **`/ship`** is the commit step for adopted `/decision-map` work. Adoption authorizes the work; `/ship` authorizes the commit (two-step). Reviewer findings during `/ship` that raise architectural questions (not code defects) may suggest `/decision-map` as remediation; not automated.
 - **`/wrap`** does not currently have a wired prompt for decisions adopted from `/decision-map`. If you adopted a recommendation this session, you are responsible for appending the entry to `decisions.md` by hand before `/wrap` runs its "append decisions" step. A future Zaude release may wire this handshake explicitly into `/wrap` step 4.
 
 ## Report format
+
+**Structural rule: the Recommendation is the LAST section emitted.** Context, options, analysis, drafts, and housekeeping come before it. The user's eye should land on the recommendation as the closing line of the document — that's where the action signal is.
 
 ```
 ## Decision: <restated question, canonicalized>
@@ -216,22 +219,6 @@ Omit the table and use per-option prose when options are structurally unequal
 
 ---
 
-### Recommendation
-
-**<Option X>** (confidence: <high | medium | low>)
-
-**Why:** <2–3 sentences grounded in specific rows of the Analysis table. No new reasoning — synthesis only.>
-
-**Primary tradeoff:** <what you're giving up by picking X.>
-
-**Taste / principles note:** <if the recommendation involved a judgment call not captured in the table, name it here. Example: "I weighted reversibility over impl cost because the vault shows a pattern of regret on 1-way doors chosen for speed." Omit this line if no judgment call was involved.>
-
-**Rollback plan:** <concrete steps if X proves wrong within 2 weeks. Not "we'll revert" — actual steps: what to undo, what to restore, what to communicate.>
-
-**Revisit trigger:** <the concrete, observable signal that would invalidate this recommendation and warrant a new `/decision-map`.>
-
----
-
 ### Draft entry for open-questions.md
 
 <Pre-formatted Q<N> block using the template at the bottom of open-questions.md.
@@ -252,7 +239,94 @@ Print-only — the user copies if they want formal tracking.>
 - I did NOT append to `open-questions.md` (the draft block above is for you to copy).
 - <If filler options were rejected:> I considered and rejected <option Y> because <reason>.
 - Options are presented alphabetically by assigned name, not in the order you named them, to neutralize phrasing bias.
+
+---
+
+### Recommendation
+
+**<Option X>** (confidence: <high | medium | low>)
+
+**Why:** <2–3 sentences grounded in specific rows of the Analysis table. No new reasoning — synthesis only.>
+
+**Primary tradeoff:** <what you're giving up by picking X.>
+
+**Taste / principles note:** <if the recommendation involved a judgment call not captured in the table, name it here. Example: "I weighted reversibility over impl cost because the vault shows a pattern of regret on 1-way doors chosen for speed." Omit this line if no judgment call was involved.>
+
+**Rollback plan:** <concrete steps if X proves wrong within 2 weeks. Not "we'll revert" — actual steps: what to undo, what to restore, what to communicate.>
+
+**Revisit trigger:** <the concrete, observable signal that would invalidate this recommendation and warrant a new `/decision-map`.>
+
+**Invitation line — conditional on whether the recommendation is Defer:**
+
+- If the recommended option is **not** Defer: `Reply `go` to start implementing Option X. Reply `go with <letter-or-name>` to adopt a different option, or redirect with a new constraint to re-analyze.`
+- If the recommended option **is** Defer: `Reply `go` to adopt Defer — I'll acknowledge and print the revisit trigger; no implementation. Reply `go with <letter-or-name>` to adopt a non-Defer option instead, or redirect with a new constraint to re-analyze.`
 ```
+
+## Post-recommendation behavior
+
+After emitting the report, Claude watches for the user's next reply. The report ends with an explicit invitation to reply `go` to adopt the recommendation. The adoption contract below is mechanical — no judgment calls, no substring matches.
+
+### Signal recognition — strict token match
+
+Strip the user's reply of leading/trailing whitespace and trailing punctuation (`.`, `!`, `?`). Compare case-insensitively against these exact patterns (nothing more, nothing less):
+
+**Bare adoption → adopt the recommended option:**
+- `go`
+- `yes`
+- `approved`
+- `implement it`
+
+**Named adoption → adopt option X (where X is a letter `A`/`B`/`C`/... or the full option name including `Defer`):**
+- `go with <X>`
+
+If X equals the recommended option's identifier, the effect is identical to bare adoption. If X differs, adopt X instead — which may trigger the Defer special case below if X is Defer.
+
+(`adopt <X>` is deliberately NOT in the signal set — `go with <X>` is the single canonical named-adoption form. One phrasing, no drift.)
+
+**Rejection / redirect → do NOT adopt; wait for new direction:**
+- `no`
+- `reject`
+- `try again`
+- `revisit with <new constraint>`
+
+**Anything else → wait.** Examples that do NOT match:
+- `go check the README` — reply contains non-token text → wait (this is the reason strict-match exists)
+- `yes but option A` — hedged reply → wait; ask for clarification
+- `proceed`, `ship it`, `do it` — explicitly NOT in the signal set; `proceed` collides with Zaude's destructive-action announcement closer ("Proceeding in one beat…"), `ship it` collides with the `/ship` command, `do it` is ambiguous. If the user wants to adopt, they use one of the four bare tokens above.
+
+Option-identifier match is case-insensitive (`go with a` = `go with A` = `go with Defer` = `go with defer`).
+
+### Scope — mechanical turn-adjacency rule
+
+The adoption signal fires ONLY when ALL of these hold:
+
+1. The `/decision-map` output was emitted in Claude's immediately-preceding turn (the turn just before the user's reply being evaluated).
+2. No intervening user turn exists between the map emit and the reply — not a clarifying question, not a slash command, not anything. One turn, one chance.
+3. The reply is a strict token match per the signal-recognition rules above.
+
+If the user invokes another slash command, asks a clarifying question in a separate turn, or replies with anything non-matching first, the adoption window closes. A subsequent `go` is no longer an adoption signal — Claude must ask what it refers to.
+
+### Defer special case
+
+When the adopted option is **Defer** (whether as the recommendation or a named alternative), there is no implementation. Claude:
+
+- Acknowledges the defer in plain text.
+- Prints the revisit trigger (already present in the Draft entry for `open-questions.md` section of the emitted report).
+- Does NOT write to `open-questions.md` — per the file-writes prohibition, the user copies the Q&lt;N&gt; block manually if they want formal tracking.
+- Does NOT begin any other work.
+
+### Implementation path when a non-Defer option is adopted
+
+Treat the adoption as an implicit invocation of `/build <recommended-option-description>`. Follow `/build` semantics exactly: non-trivial work invokes `architect-review` DESIGN mode before coding, then `code-reviewer` on the diff, then specialist agents (`security-auditor`, `performance-engineer`, `test-automator`) per the standard `/build` trigger rules. Trivial work (single-file config tweak, doc edit) skips straight to implementation.
+
+### Two-step authorization: adoption ≠ commit
+
+**Adoption authorizes the work, not the ship.** Commits require a second, explicit authorization:
+
+- After implementation completes, the user invokes `/ship` (or explicitly says `commit` / `commit and push`).
+- A second `go` after implementation completes is NOT an adoption signal — the scope rule already closed the window when implementation started. Claude asks for commit intent explicitly.
+
+This preserves Zaude's existing commit-step discipline: `/ship` runs the review chain, drafts the commit, and requires approval of the drafted message. `/decision-map` adoption cannot short-circuit that.
 
 ## Refusal outputs
 
