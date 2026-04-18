@@ -259,6 +259,7 @@ def main() -> int:
     for filename, title in [
         ("CLAUDE.md", "CLAUDE.md"),
         ("current-state.md", "current-state.md"),
+        ("backlog.md", "backlog.md"),
         ("open-questions.md", "open-questions.md"),
         ("spec.md", "spec.md"),
         ("architecture.md", "architecture.md"),
