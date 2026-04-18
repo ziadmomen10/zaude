@@ -1,6 +1,6 @@
 # 05 — Slash commands
 
-Zaude ships six slash commands. They're the primary interface: if a command covers your workflow, use it rather than freestyling with prompts. This doc covers each command in depth — what it does, when to use it, the agent chain under the hood, the gates that stop it, and a realistic example session.
+Zaude ships seven slash commands. They're the primary interface: if a command covers your workflow, use it rather than freestyling with prompts. This doc covers each command in depth — what it does, when to use it, the agent chain under the hood, the gates that stop it, and a realistic example session.
 
 ---
 
@@ -12,6 +12,7 @@ Zaude ships six slash commands. They're the primary interface: if a command cove
 | `/build <desc>` | Plan → design → implement → review | Yes (orchestrator + design + reviewers) | No | No | No |
 | `/review` | Read-only review of uncommitted diff | Yes (code / architect / security) | No | No | No |
 | `/decision-map <question>` | Structured analysis of a stuck technical decision | Yes (architect-review + one specialist max) | No (print-only draft blocks) | No | No |
+| `/e2e-test` | Production-readiness gate: every applicable test layer + prod checklist + specialist review | Yes (2 always-on + 3 conditional) | No (writes only to gitignored artifact dir) | No | No |
 | `/ship` | Review → commit → push → vault update | Yes (full review chain) | Yes (current-state, sessions, decisions) | Yes (project + vault) | Yes (project + vault) |
 | `/wrap` | End-of-session housekeeping | Yes (code-reviewer only) | Yes (current-state, sessions, decisions, open-questions) | Yes (vault) | Yes (vault) |
 
@@ -537,6 +538,162 @@ via an env-var toggle and a deploy. No data migration required.
 
 ---
 
+## `/e2e-test` — production-readiness gate
+
+### What it does
+
+Runs every applicable testing layer the project supports (types, lint, unit, integration, e2e, build, dep-audit, secret-scan, prod-checklist, plus opt-in a11y / perf / license on `--profile=deep`), computes an increment-fit analysis against a git ref, dispatches 2 always-on + up to 3 conditional specialist agents for synthesis, and produces a **SHIP / SHIP-WITH-CAUTION / HOLD** verdict.
+
+This is the heaviest command in Zaude — expect 5–45 minutes depending on profile. It answers: "if we deployed this exact state to production right now, would it survive?"
+
+### When to use it
+
+- Before shipping a high-stakes increment (major feature, breaking change, new public surface)
+- Before cutting a release tag
+- When you're unsure whether recent changes broke something you haven't tested manually
+- As a local pre-CI gate on a branch you're about to merge
+
+Do NOT run this for every commit — `/review` covers fast pre-commit discipline. `/e2e-test` is too slow for that cadence.
+
+### Under the hood
+
+```mermaid
+flowchart TD
+    A["/e2e-test"] --> B[Phase 0: preflight<br/>git / ref / stack / disk]
+    B --> C{Preflight OK?}
+    C -->|No| D[REFUSE with preflight error]
+    C -->|Yes| E[Phase 1: stack-detect<br/>+ produce execution plan]
+    E --> F[Print plan, one-beat pause]
+    F --> G[Phase 2: increment-fit snapshot<br/>diff vs --ref]
+    G --> H[Phase 3: fast checks PARALLEL<br/>types + lint + unit + secret-scan + dep-audit]
+    H --> I[Phase 4: integration SEQUENTIAL<br/>build + integration tests + migration]
+    I --> J[Phase 5: e2e + heavy<br/>Playwright + deep-only extras]
+    J --> K[Phase 6: prod-checklist<br/>5 mechanical checks]
+    K --> L[Phase 7: agent synthesis<br/>architect-review + code-reviewer always<br/>+ conditional security/test/perf]
+    L --> M[Phase 8: emit report<br/>SHIP / SHIP-WITH-CAUTION / HOLD]
+
+    style B fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+    style E fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+    style G fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+    style H fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+    style I fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+    style J fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+    style K fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+    style L fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+    style M fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+```
+
+> **Continue-on-fail by design.** No phase cancels downstream phases. A failed Phase 3 layer marks Phase 5 layers that depended on it as `INCONCLUSIVE`, but the command still runs everything it can — the user gets a full picture on every run, not the first-failure-only view that a CI pipeline would produce.
+
+### Arguments
+
+| Flag | Default | Semantics |
+|---|---|---|
+| `--profile` | `default` | Target durations: `quick` <3 min, `default` 5–15 min, `deep` 15–45 min. Exact layer membership per profile is the **Profile × Layer matrix** in the skill file (authoritative). |
+| `--scope` | auto from profile | Comma-separated layer override: `types,lint,format,unit,integration,e2e,build,dep-audit,secret-scan,prod-checklist,a11y,perf,license` |
+| `--ref` | merge-base with default branch | Anchor for increment-fit. Auto-detects via `git symbolic-ref refs/remotes/origin/HEAD`; falls back to `main`, then `master`, then preflight-refuses. |
+| `--offline` | auto-detected | Skip network-dependent layers (dep-audit, license). Auto-set if registry probe fails. |
+| `--timeout` | `600` | Per-phase timeout in seconds. Exceeded phases are killed; layer status → `TIMEOUT`. |
+
+### Stack detection (v1)
+
+Supported ecosystems in v1: **Node.js, Python, Go**. Triggered by lockfile/config-file presence (`package.json`, `pyproject.toml`, `go.mod`). Monorepos with multiple ecosystems run per-ecosystem with prefixed layer names (`node/types`, `python/lint`). Rust / Ruby / Java / PHP / .NET are deferred to v1.1+ — projects in those stacks get a preflight refusal pointing to the optional `./.zaude/e2e-test.config.json` override.
+
+Per-layer detection is by config-file presence (tsconfig.json → tsc, .eslintrc → eslint, playwright.config → playwright, etc.) and user-declared scripts in `package.json` / `pyproject.toml` are preferred over canonical invocations.
+
+### Verdict thresholds
+
+**HOLD** if any: CRITICAL finding, unit/integration test failure, build failure, secret-scan finding in tracked files, HIGH+ dep-audit in **prod** dep, non-reversible forward migration, or increment-fit breaking change without CHANGELOG diff / version field bump / git tag on HEAD (any one sufficient).
+
+**SHIP-WITH-CAUTION** if any: HIGH finding (not breaking change), HIGH dep-audit in **dev** dep, `e2e`/`integration` SKIP **scoped** to whether Phase 2 surfaced relevant changes (a project with no integration tests that changed only an internal utility is SHIP, not CAUTION — the trigger fires only when the skipped layer would have covered the changed surface), `--offline` forced skip, `--profile=quick` used (automatic downgrade — quick is not a production verdict), coverage drop >5pp, or no tests at all.
+
+**SHIP** if all clean — only MEDIUM/LOW findings allowed.
+
+### Gates
+
+- Missing `.git/` → preflight refusal
+- `--ref` unresolvable → preflight refusal
+- Zero supported ecosystems detected with source present → preflight refusal
+- Disk free <500 MB → preflight refusal
+- Detached HEAD without explicit `--ref` → preflight refusal
+- Project has no test runners but has source → `NOTHING-TO-TEST` advisory + SHIP-WITH-CAUTION
+- Uncommitted changes → proceed as-is (do NOT stash); output header notes the state
+- **NEVER commits, NEVER pushes, NEVER modifies source files.** Only filesystem writes are the timestamped artifact dir + announce-and-proceed append to `.gitignore`.
+
+### Composition with other commands
+
+- **`/build`** and **`/ship`** do not auto-invoke `/e2e-test`. Manual only — the command is too slow for every-ship cadence.
+- **`/review`** is orthogonal: fast pre-commit reviews vs. slow stack-executing gate.
+- **`/wrap`** does not commit `./.zaude/e2e-test/` (it's gitignored).
+
+### Artifacts
+
+Each run lands at `./.zaude/e2e-test/<ISO-timestamp>/`:
+
+```
+.zaude/e2e-test/2026-04-18T14-30-00Z/
+├── run.log                  — full raw log
+├── plan.json                — Phase 1 execution plan
+├── findings.json            — machine-readable findings
+├── report.md                — same report emitted to the user
+├── coverage/                — unit test coverage output
+├── junit/                   — JUnit XML if produced
+└── playwright-trace/        — if e2e ran
+```
+
+### Example
+
+```
+You: /e2e-test
+
+Claude:
+[e2e-test 0m:00s] Phase 0/8 preflight — done (git OK, ref OK → origin/main, stack OK: node, disk OK)
+
+### Execution plan
+
+| Layer | Planned | Reason if SKIP |
+|---|---|---|
+| types | YES | tsconfig.json detected |
+| lint | YES | eslint.config.js detected |
+| format | YES | .prettierrc detected |
+| unit | YES | vitest.config.ts detected |
+| integration | SKIP | no integration test dir |
+| e2e | YES | playwright.config.ts detected |
+| build | YES | package.json scripts.build |
+| dep-audit | YES | npm |
+| secret-scan | YES | always applicable |
+| prod-checklist | YES | |
+| a11y | SKIP | --profile=default (opt-in via deep) |
+| perf | SKIP | --profile=default |
+| license | SKIP | --profile=default |
+
+Proceeding in one beat.
+
+[e2e-test 0m:02s] Phase 1/8 stack-detect — done (1 ecosystem, 13 layers planned, 9 will run)
+[e2e-test 0m:05s] Phase 2/8 increment-fit — done (12 files changed, 2 public surfaces touched)
+[e2e-test 0m:42s] Phase 3/8 fast-checks — done (types PASS, lint PASS, format PASS, unit 147/150 PASS, secret-scan 0 findings, dep-audit 2 MEDIUM)
+[e2e-test 1m:08s] Phase 4/8 integration — done (build PASS 24s, integration SKIP: not configured, migrations N/A)
+[e2e-test 1m:12s] Phase 5/8 e2e-heavy — running Playwright (expected ~8 min)
+[e2e-test 9m:31s] Phase 5/8 e2e-heavy — done (e2e 22/22 PASS)
+[e2e-test 9m:38s] Phase 6/8 prod-checklist — done (5 items, 1 MEDIUM finding: DATABASE_URL referenced in src/db.ts but not in .env.example)
+[e2e-test 10m:04s] Phase 7/8 synthesis — done (2 agents dispatched: architect-review + code-reviewer)
+
+## /e2e-test — production readiness report
+
+**Verdict:** SHIP-WITH-CAUTION
+**Profile:** default
+**Ref compared against:** origin/HEAD → a3f9c21 (5 commits behind HEAD)
+**Duration:** 10m 12s
+
+[... full report table + findings + recommendation ...]
+
+**SHIP WITH CAUTION.** Integration tests are not configured for this project. Proceed if you have manually verified the integration paths this increment touches. Do not proceed if the changed files (`src/db.ts`, `src/api/users.ts`) depend on untested integration behavior.
+
+Full report: ./.zaude/e2e-test/2026-04-18T14-30-00Z/report.md
+```
+
+---
+
 ## `/ship` — the shipping workflow
 
 ### What it does
@@ -795,6 +952,7 @@ The full list of things that STOP each command. Useful to skim before you run on
 | `/build` | Orchestrator flags feature as blocked; design-bridge finds DESIGN.md violation; any reviewer returns CRITICAL or HIGH |
 | `/review` | Never stops — always reports |
 | `/decision-map` | Empty question; scope classifier rejects non-technical; settled decision without `--revisit`; vault context too thin; every option FAILs hard-rule compliance |
+| `/e2e-test` | Missing `.git/`; `--ref` unresolvable; no supported ecosystem detected; disk free <500 MB; detached HEAD without explicit `--ref`. All are preflight errors (not verdicts). |
 | `/ship` | Reviewer CRITICAL or HIGH; pre-commit hook failed; project push rejected; vault has unrelated changes; vault remote has newer commits |
 | `/wrap` | code-reviewer returns CRITICAL or HIGH on uncommitted work; vault remote has newer commits |
 
@@ -837,5 +995,6 @@ See also the source of each command:
 - [`build.md`](../templates/claude-config/commands/build.md)
 - [`review.md`](../templates/claude-config/commands/review.md)
 - [`decision-map.md`](../templates/claude-config/commands/decision-map.md)
+- [`e2e-test.md`](../templates/claude-config/commands/e2e-test.md)
 - [`ship.md`](../templates/claude-config/commands/ship.md)
 - [`wrap.md`](../templates/claude-config/commands/wrap.md)

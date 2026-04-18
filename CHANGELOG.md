@@ -7,34 +7,59 @@ All notable changes to Zaude are documented here. This project follows [Keep a C
 ## [Unreleased]
 
 ### Added
-- **`/decision-map <question>`** — sixth slash command for structured analysis of stuck technical decisions. Read-only by design: never writes to `decisions.md`, never auto-appends to `open-questions.md`, never commits.
+
+#### `/e2e-test` — seventh slash command
+
+- **`/e2e-test`** — production-readiness gate. Runs every applicable testing layer (types, lint, format, unit, integration, e2e, build, dep-audit, secret-scan, prod-checklist, plus opt-in a11y / perf / license on `--profile=deep`), computes increment-fit analysis against a git ref, dispatches 2 always-on + up to 3 conditional specialist agents, and produces a **SHIP / SHIP-WITH-CAUTION / HOLD** verdict. Manual-invocation only (5–45 min depending on profile). Never commits, never pushes, never modifies source files (carve-outs documented in Gates).
+  - `templates/claude-config/commands/e2e-test.md` (NEW) — skill file with 8-phase workflow (Phase 0 preflight through Phase 8 emit), continue-on-fail semantics with `INCONCLUSIVE` layer status distinct from `SKIP`, three-profile axis (`quick` / `default` / `deep`), authoritative Profile × Layer matrix, and progress narration pattern for commands exceeding 5 min.
+  - `docs/05-commands.md` — new section documenting phases, arguments, verdict thresholds, stack detection, artifacts, composition, with a realistic Node.js worked example demonstrating a SHIP-WITH-CAUTION verdict driven by missing integration tests.
+- **Three verdicts** for `/e2e-test` — SHIP / SHIP-WITH-CAUTION / HOLD — severity-gated, not finding counts:
+  - HOLD: any CRITICAL finding, unit/integration test failure, build failure, secret-scan finding in tracked files, HIGH+ dep-audit in **prod** dep, non-reversible forward migration (mechanical rule: additive DDL only, or explicit down-migration), or increment-fit breaking change without CHANGELOG diff / version-field bump / git-tag-on-HEAD acknowledgment.
+  - SHIP-WITH-CAUTION: any HIGH finding, HIGH dev dep-audit, `e2e`/`integration` SKIP **scoped** to whether Phase 2 surfaced relevant changes (a project with no integration tests that changed only an internal utility is SHIP, not CAUTION), offline-forced skip, `--profile=quick` (automatic downgrade), coverage drop >5pp, or no tests at all.
+  - SHIP: all clean, MEDIUM/LOW findings allowed.
+- **Stack detection in v1: Node.js + Python + Go.** Detected by lockfile/config presence (monorepos run per-ecosystem with prefixed layer names). Rust/Ruby/Java/PHP/.NET deferred to v1.1+ with an optional `./.zaude/e2e-test.config.json` override path documented for custom stacks.
+- **Agent dispatch matrix** — `architect-review` REVIEW mode + `code-reviewer` always-on; `security-auditor` / `test-automator` / `performance-engineer` conditional on specific signals. Typical run: 2 agents. Max: 5. Matches `/decision-map` conservatism when signal is absent. Security-auditor path-trigger globs narrowed to avoid false-firing on `tokenizer.ts` / design-token files.
+- **Artifact directory** `.zaude/e2e-test/<ISO-timestamp>/` with `run.log`, `plan.json`, `findings.json`, `report.md`, `coverage/`, `junit/`, `playwright-trace/`. On first run, appends `.zaude/e2e-test/` to `.gitignore` (the only tracked-file write the command performs).
+- **Five flags** for `/e2e-test` — `--profile` (quick/default/deep), `--scope` (CSV layer override; surgical, wins over profile), `--ref` (increment-fit anchor, defaults to merge-base with default branch via `git symbolic-ref`), `--offline` (auto-detected via HTTP HEAD probe to registry, handles corporate proxies), `--timeout` (per-phase seconds).
+- **Progress narration pattern** — exactly one status line per phase boundary in format `[e2e-test Nm:Ss] Phase N/8 <slug> — <status>`. Canonical phase slugs table in skill file. Heartbeat before any command expected to exceed 5 min. No mid-phase narration, no sleep-and-poll, no incremental findings.
+
+#### `/decision-map` — sixth slash command
+
+- **`/decision-map <question>`** — structured analysis of stuck technical decisions. Read-only by design: never writes to `decisions.md`, never auto-appends to `open-questions.md`, never commits.
   - `templates/claude-config/commands/decision-map.md` (NEW) — skill file with 9-step workflow (Step 0 scope classifier → type classification with security-token override → vault precedent scan → option enumeration → specialist dispatch → scoring → anti-sycophancy self-check → confidence calibration → read-only emit).
-  - `docs/05-commands.md` — new section documenting the command, mermaid flow, gates, composition with other commands, and a realistic worked example (rate-limiter decision re-litigation).
-- **Anti-sycophancy primitives** baked into `/decision-map`:
-  - Options presented alphabetically by assigned name, not in the user's phrasing order.
-  - Mandatory pre-emit self-check for "am I rubber-stamping what the user named first?".
-  - Refuses to invent filler options when only one or two sane options exist.
-- **Specialist dispatch matrix** for `/decision-map` — `architect-review` DESIGN mode always, plus at most one conditional specialist (`security-auditor` / `performance-engineer` / `test-automator`) sequentially. Hard cap of two agents per invocation; third-dimension gap surfaced explicitly in the output.
-- **Five refusal outputs** for `/decision-map`:
-  - Empty arguments → usage hint with examples
-  - Non-technical decision in disguise → scope refusal
-  - Already-settled decision without `--revisit` (or `--revisit` without a detectable rationale clause) → surface prior entry, require rationale
-  - Insufficient vault context → list missing pieces; explicit `--force` flag required to override
-  - Every option fails hard-rule compliance → tell the user the option space is empty; ask whether to propose a new option or override a rule
-- **Three flags** for `/decision-map`:
-  - `--revisit` bypasses the settled-decision refusal when a rationale clause is detected in the question (mechanical check for signal words: `because`, `since`, `now that`, `new constraint`, `changed`, etc.).
-  - `--force` bypasses the insufficient-context refusal; confidence is automatically capped at `low`.
-  - `--draft-decision` includes a pre-formatted `decisions.md` entry block in the output (print-only, never writes).
+  - `docs/05-commands.md` — new section with mermaid flow, gates, composition, and a worked example (rate-limiter decision re-litigation).
+- **Anti-sycophancy primitives** — options presented alphabetically by assigned name (not user phrasing order); mandatory pre-emit self-check; refuses to invent filler options.
+- **Specialist dispatch matrix** — `architect-review` DESIGN mode always + at most one conditional specialist (`security-auditor` / `performance-engineer` / `test-automator`) sequentially. Hard cap of two agents per invocation.
+- **Five refusal outputs** — empty `$ARGUMENTS`, non-technical decision, already-settled without `--revisit` (or `--revisit` without detectable rationale), insufficient vault context (explicit `--force` flag required to override), every option fails hard-rule compliance.
+- **Three flags** — `--revisit` (mechanical signal-word rationale check), `--force` (caps confidence at `low`), `--draft-decision` (print-only, never writes).
 
 ### Design decisions in this release
-- **`/decision-map` never writes to `decisions.md`.** That file is human-authored and append-only. If the command could write to it, precedent would contain AI-generated entries the user didn't actually decide — poisoning every future `/decision-map` run. Hard architectural guarantee, not a config option.
+
+#### `/e2e-test`
+- **Continue-on-fail, never halt-fast.** Downstream layers are marked `INCONCLUSIVE` (distinct from `SKIP`) when an upstream failure invalidates them, but the command runs every layer it can. Rationale: the user gets a full picture on every run, not the first-failure-only view.
+- **Three-verdict model (not binary).** SHIP/HOLD was too blunt for a production-readiness gate. SHIP-WITH-CAUTION captures "the stack ran clean but coverage was incomplete" — scoped specifically to what the current increment actually touched, so a Node project with no integration tests is SHIP when the change didn't need integration coverage, SHIP-WITH-CAUTION when it did.
+- **Secret scan covers tracked tree AND diff-since-ref.** A secret committed 6 commits ago and untouched today is still in the ship artifact. Scanning only the current diff would miss it.
+- **`--ref` defaults to merge-base with default branch**, not "last tag." Tag-based anchors break on projects that haven't tagged recently or just cut one.
+- **Mechanical checks all the way down.** Increment-fit breaking-change acknowledgment requires CHANGELOG diff / version-field change / git tag — not semantic inference. Migration reversibility is binary: additive DDL only, or explicit down-file. Security-auditor triggers on narrow glob patterns, not substring matches. Every judgment call was either mechanized or explicitly flagged as an open concern.
+- **Agent count capped at 2 always-on + 3 conditional (5 max, 2 typical).** Earlier draft had 4 always-on. `architect-review` and `test-automator` overlap on "is the change coherent"; fire `test-automator` only when the test layer itself has signal.
+- **Inline secret-scan pattern library in v1; external tools (trufflehog / gitleaks) in v1.1.** External tools would mandate a dependency; inline patterns are portable. Pattern library corrected during review to include AWS STS (`ASIA`), PKCS#8 private keys (no type prefix), and extended Slack token upper bounds.
+
+#### `/decision-map`
+- **Never writes to `decisions.md`.** That file is human-authored and append-only. If the command could write to it, precedent would contain AI-generated entries the user didn't actually decide — poisoning every future `/decision-map` run. Hard architectural guarantee, not a config option.
 - **Sequential agent dispatch, not parallel.** Parallel `Skill`-dispatched agents produce interleaved output that's hard to attribute; 80% of decisions only need one specialist anyway. Parallel fan-out is deferred to v1.1 if real-world usage shows latency problems.
 - **Dropped "strategic fit" as a scoring criterion.** Either it's objective hard-rule compliance (in the table) or it's taste (in a named "Taste / principles" recommendation line). Averaging the two produced hand-wavy scores that hid the judgment call.
 - **Five load-bearing criteria, not eight.** Decision fatigue is the failure mode the command is designed to prevent — `/decision-map` cannot itself be a source of it. Situational criteria (user impact, maintenance burden, migration safety) appear only when they change the answer.
-- **Confidence calibration is gated, not free-form.** `high` requires precedent-agrees AND unambiguous hard rules AND low-to-medium risk. Any skipped specialist caps confidence at `medium`. Prevents over-confident recommendations on thin analysis.
-- **`/build` does NOT auto-invoke `/decision-map`.** Auto-invocation creates a workflow loop (orchestrator surfaces ambiguity → decision-map runs → user picks → build resumes — four steps where one direct question would do). Users reach for the command themselves; `workflow-orchestrator` may *suggest* it in its plan output.
+- **Confidence calibration is gated, not free-form.** `high` requires precedent-agrees AND unambiguous hard rules AND low-to-medium risk. Any skipped specialist caps confidence at `medium`. `--force` or thin `--revisit` rationale caps at `low`.
+- **`/build` does NOT auto-invoke `/decision-map`.** Auto-invocation creates a workflow loop. Users reach for the command themselves; `workflow-orchestrator` may *suggest* it.
 
 ### Verified
+
+#### `/e2e-test`
+- Design spec produced by `architect-review` in DESIGN mode before implementation. Revisions to the draft incorporated: flag axis collapsed to single `--profile`, `--ref` default corrected to merge-base, three-verdict model, continue-on-fail semantics, Phase 0 preflight gate, execution-plan preview, stack-detection scope trimmed to v1 ecosystems (Node/Python/Go), secret-scan surface corrected to cover tree + diff-since-ref (not diff-only).
+- Implementation reviewed by `code-reviewer` + `architect-review` REVIEW mode before commit. Findings addressed in-place across HIGH and MEDIUM severities: Profile × Layer matrix made authoritative (resolves `--profile=quick` layer-list ambiguity), secret-scan regexes hardened (Slack upper bound raised, PKCS#8 private keys covered, AWS STS `ASIA` included), security-auditor trigger globs narrowed to specific auth-context patterns, SHIP-WITH-CAUTION `e2e`/`integration` SKIP triggers scoped to Phase 2 relevance, increment-fit breaking-change check made mechanical, migration reversibility severity explicit (CRITICAL), network probe corrected to HTTP HEAD, package-manager precedence for multi-lockfile repos defined, tool-resolvability precheck added to Phase 1, debug-noise logger exclusion pattern-based, `.gitignore` carve-out from "NEVER modifies source" rule made explicit. Remaining LOW-severity polish items tracked separately.
+- MVP scope discipline: Rust/Ruby/Java/PHP/.NET ecosystem detection, Lighthouse perf baseline trend storage, CI machine-readable output (JUnit/SARIF aggregation), rate-limit/CORS/security-headers prod-checklist items, testcontainers DB orchestration — all explicitly deferred to v1.1+ with rationale per item.
+
+#### `/decision-map`
 - Design reviewed in DESIGN mode by `architect-review` before implementation; raised concerns were incorporated or explicitly resolved before the skill file was written (scoring-criteria reduction from 8 → 5 load-bearing + 3 situational, sequential specialist dispatch vs parallel fan-out, dropped "strategic fit" as a scoring criterion, added Step 0 scope classifier, added mandatory anti-sycophancy pre-emit gate).
 - Implementation reviewed by `code-reviewer` + `architect-review` REVIEW mode before commit; findings addressed in-place across CRITICAL, HIGH, and MEDIUM severities (alphabetical-ordering bug in worked example, mechanical `--revisit` rationale check, `--force` flag for insufficient-context opt-in, gate predicate corrections, docs/skill alignment on situational criteria and `/wrap` composition). Remaining LOW-severity polish items tracked separately.
 
