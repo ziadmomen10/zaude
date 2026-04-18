@@ -536,6 +536,10 @@ Comparing HEAD (`<sha>`) against `<ref>` (`<sha>`):
 
 Fix the blocking items and re-run `/e2e-test`.
 
+<If the HOLD was triggered by a specific unit/integration/e2e layer failure, append this line:>
+
+> **Drill further:** `/microscope --test="<failing layer's command>"` — live-audit with root-cause hypotheses on that specific test. Suggestion only; `/microscope` remains manual-invocation.
+
 ---
 
 ### Artifacts

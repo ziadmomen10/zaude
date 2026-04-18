@@ -1,6 +1,6 @@
 # 05 — Slash commands
 
-Zaude ships seven slash commands. They're the primary interface: if a command covers your workflow, use it rather than freestyling with prompts. This doc covers each command in depth — what it does, when to use it, the agent chain under the hood, the gates that stop it, and a realistic example session.
+Zaude ships eight slash commands. They're the primary interface: if a command covers your workflow, use it rather than freestyling with prompts. This doc covers each command in depth — what it does, when to use it, the agent chain under the hood, the gates that stop it, and a realistic example session.
 
 ---
 
@@ -13,6 +13,7 @@ Zaude ships seven slash commands. They're the primary interface: if a command co
 | `/review` | Read-only review of uncommitted diff | Yes (code / architect / security) | No | No | No |
 | `/decision-map <question>` | Structured analysis of a stuck technical decision | Yes (architect-review + one specialist max) | No (print-only draft blocks) | No | No |
 | `/e2e-test` | Production-readiness gate: every applicable test layer + prod checklist + specialist review | Yes (2 always-on + 3 conditional) | No (writes only to gitignored artifact dir) | No | No |
+| `/microscope <test>` | Live-audit a test run: pre-load context, stream events, emit ranked root-cause hypotheses | Yes (code-reviewer always + 2 conditional) | No (writes only to gitignored artifact dir) | No | No |
 | `/ship` | Review → commit → push → vault update | Yes (full review chain) | Yes (current-state, sessions, decisions) | Yes (project + vault) | Yes (project + vault) |
 | `/wrap` | End-of-session housekeeping | Yes (code-reviewer only) | Yes (current-state, sessions, decisions, open-questions) | Yes (vault) | Yes (vault) |
 
@@ -732,6 +733,168 @@ Full report: ./.zaude/e2e-test/2026-04-18T14-30-00Z/report.md
 
 ---
 
+## `/microscope <test-command>` — live-audit a test run
+
+### What it does
+
+Attaches to an in-progress test run and produces a live trace with a ranked root-cause hypothesis list. Pre-loads the test file, the function(s) under test, fixtures, relevant config, and recent git diff *before* the test runs — so when events stream during execution, there's enough context to interpret them in real time.
+
+Read-only: never writes source, never applies fixes, never re-runs the test after emitting hypotheses. Single output — a report with three grades of confidence (HIGH / MEDIUM / LOW) where each hypothesis cites file:line, streamed event timestamp, fix sketch, and exact verification command.
+
+### When to use it
+
+- A test is failing and the stack trace alone isn't enough to find the root cause
+- You've applied a fix and want to verify the expected code path ran
+- `/e2e-test` reported a layer failure — use `/microscope --test="<failing layer's command>"` to drill
+- A test is intermittently failing and you want a live trace the next time it fails
+
+### Under the hood
+
+```mermaid
+flowchart TD
+    A["/microscope --test=&lt;cmd&gt;"] --> B[Phase 0: preflight<br/>git / test binary / runner detected / disk]
+    B --> C{Preflight OK?}
+    C -->|No| D[REFUSE with preflight error]
+    C -->|Yes| E[Phase 1: context-load<br/>test + impl depth-1 + fixtures + diff<br/>CAPPED at 15 files / 3000 lines]
+    E --> F[Phase 2: instrumentation plan<br/>+ one-beat pause]
+    F --> G[Phase 3: live-execution<br/>Bash run_in_background + Monitor<br/>OR buffered fallback]
+    G --> H[Phase 4: synthesis<br/>code-reviewer always<br/>+ security-auditor / architect-review conditional<br/>+ hypothesis grading]
+    H --> I[Phase 5: emit<br/>live trace + hypotheses + artifacts]
+
+    style B fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+    style E fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+    style F fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+    style G fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+    style H fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+    style I fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+```
+
+Six phases:
+
+0. **Preflight** — git exists, `--test` resolves (from flag or scrollback's most recent failed test command), test binary resolvable, recognized runner (vitest/jest/mocha/pytest/go test/playwright/cypress in v1), disk ≥500MB. Unrecognized runner → falls back to `raw` mode with reduced narration signal. Unknown layer flag or `--rerun >1` → refusal.
+1. **Context-load** — test file + config (always full); function-under-test at **depth-1 imports only, capped at 15 files or 3000 lines**; fixtures/mocks adjacent to test (cap 5); git diff `HEAD~5..HEAD` on loaded paths (cap 2000 lines). Cap-hit flagged in output.
+2. **Instrumentation plan** — which layers will be observed (runner/code/types/logs in v1; http/db/fs deferred to v1.1+); one-beat pause for user to abort.
+3. **Live execution** — `Bash run_in_background=true` + `Monitor`-equivalent streaming. Falls back to synchronous + buffered output if streaming unavailable, flagged as `Streaming mode: degraded-buffered`. Rate-limited narration: one annotation per event class per event; console noise silently collapsed (still lands in `run.log` + `events.jsonl`).
+4. **Synthesis** — `code-reviewer` always-on (unless `--no-agents`); `security-auditor` if auth-context path matched; `architect-review` REVIEW mode if hypothesis cites ≥2 modules. Max 3 agents. Hypothesis grading: HIGH = event↔context link + (diff corroboration OR structural bug visible); MEDIUM = event link only; LOW = reasoned guess.
+5. **Emit** — single report, not incremental. Artifacts land in `./.zaude/microscope/<timestamp>/`.
+
+### Arguments
+
+| Flag | Default | Semantics |
+|---|---|---|
+| `--test` | scrollback's most recent failed runner command | Test command. Passed verbatim to bash; Claude does not rewrite. |
+| `--focus` | auto-extracted from `--test` | Narrow Phase 1 to a specific path or `<file>::<test-name>`. |
+| `--layers` | all v1-detectable | CSV of `runner`, `code`, `types`, `logs`. Unknown values → refusal. |
+| `--timeout` | `600` | Per-phase seconds; exceeded → kill process-tree, verdict `TIMEOUT`. |
+| `--rerun` | `1` | v1 honors `--rerun=1` only; higher values refuse (flake detection v1.1). |
+| `--no-agents` | off | Skip Phase 4 agent dispatch; Claude-only synthesis. |
+
+### Supported runners (v1)
+
+vitest, jest, mocha, pytest, go test, playwright, cypress. Each has a concrete regex row in the skill file defining start-of-run / test-start / pass / fail / assertion / hook detection. ANSI escape codes and CRLF normalized before matching.
+
+Unrecognized runners fall back to `raw` mode: narration emits only process start + exit code + last 3 stderr lines. Phase 4 still runs, relying on the buffered output + Phase 1 pre-loaded context.
+
+### Streaming-mechanism contract
+
+| Tier | Mechanism | User-visible |
+|---|---|---|
+| Ideal | `Bash run_in_background=true` + `Monitor` | Live narration per rate-limit rules |
+| Fallback | `Bash` synchronous + full buffer | Phase 3 jumps start→done; annotations derived post-hoc; `Streaming mode: degraded-buffered` in header |
+
+No sleep-and-poll. Ever.
+
+### Hypothesis grading
+
+| Grade | Requires |
+|---|---|
+| HIGH | Streamed event directly cites a specific line in pre-loaded context AND (line is in recent diff OR structural bug visible without execution) |
+| MEDIUM | Event↔context link exists but no diff corroboration, no visible structural bug |
+| LOW | Reasonable guess not directly supported by streamed events |
+
+Max 5 hypotheses per run. Each cites file:line + code snippet, streamed event timestamp, fix sketch (prose, not a diff), verification command.
+
+### Gates
+
+- Preflight refusals: missing `.git/`, no `--test`+no scrollback match, test binary not resolvable, disk <500MB, unknown `--layers` value, `--rerun >1`. Unrecognized runner is NOT a preflight refusal — it downgrades to `raw` mode in Phase 2's plan and continues.
+- **NEVER commits, NEVER pushes, NEVER modifies source files.** Exceptions: artifact dir `.zaude/microscope/<timestamp>/` + one-time `.gitignore` append
+- **NEVER applies fixes.** Hypothesis section includes fix sketches; user authors.
+- **NEVER re-runs the test after emitting hypotheses.** User drives iteration.
+
+### Composition with other commands
+
+- **`/build`**, **`/review`**, **`/ship`**, **`/wrap`**, **`/decision-map`** — all orthogonal. No auto-invocation in either direction.
+- **`/e2e-test`** — orthogonal in v1. `/e2e-test`'s HOLD verdict output now includes a `Drill further: /microscope --test="..."` copy-paste suggestion line, but nothing auto-invokes. A v1.1 `/e2e-test --drill-on-fail=<layer>` opt-in may be added later.
+
+### Artifacts
+
+Each run lands at `./.zaude/microscope/<ISO-timestamp>/`:
+
+```
+.zaude/microscope/2026-04-18T14-30-00Z/
+├── run.log              — full raw stdout+stderr
+├── plan.json            — Phase 2 instrumentation plan
+├── hypotheses.json      — machine-readable hypothesis list
+├── report.md            — markdown report
+├── events.jsonl         — every streamed event, JSON lines
+└── context/             — every file loaded in Phase 1 (reproducibility snapshot)
+```
+
+Gitignored on first run via announce-and-proceed append.
+
+### Example
+
+```
+You: /microscope --test="vitest auth.spec.ts"
+
+Claude:
+[microscope 0m:00s] Phase 0/5 preflight — done (runner: vitest, ecosystem: node, binary resolved)
+[microscope 0m:02s] Phase 1/5 context-load — done (test + config + 9 impl files + 2 fixtures + 342 diff lines)
+[microscope 0m:04s] Phase 2/5 instrumentation-plan — done (runner+code+types+logs instrumented; http/db/fs skipped — v1)
+
+Proceeding in one beat. Ctrl+C to abort.
+
+[microscope 0m:05s] Phase 3/5 live-execution — starting (vitest auth.spec.ts)
+[microscope 0m:06s]   beforeAll hook started
+[microscope 0m:06s]   test "rejects invalid email" PASSED
+[microscope 0m:06s]   test "accepts valid email" FAILED at auth.spec.ts:23
+[microscope 0m:07s]   afterAll hook ran
+[microscope 0m:08s] Phase 3/5 live-execution — FAIL (1/2 passed, exit 1)
+[microscope 0m:10s] Phase 4/5 synthesis — done (1 agent dispatched, 2 hypotheses: 1 HIGH / 0 MEDIUM / 1 LOW)
+
+## /microscope — vitest auth.spec.ts
+
+**Outcome:** FAIL
+**Runner:** vitest
+**Streaming mode:** live
+**Duration:** 0m 10s
+
+### Root-cause hypotheses
+
+#### 1. HIGH — `validateEmail` returns undefined on valid input
+
+**Evidence:**
+- Streamed event `test "accepts valid email" FAILED at auth.spec.ts:23` at `0m:06s`
+- Source `src/auth/validate.ts:10-15`:
+  ```typescript
+  export function validateEmail(email: string) {
+    if (!email.includes('@')) return false;
+    // missing: return true;
+  }
+  ```
+- Recent diff: commit `a3f9c21` (2h ago) deleted line 14 — "refactor validate.ts for brevity"
+
+**Fix sketch:** Add `return true;` after the if-check at src/auth/validate.ts:14.
+
+**Verify:** `vitest auth.spec.ts -t "accepts valid email"`
+
+[... LOW hypothesis + agent findings + context snapshot + artifacts paths ...]
+
+Full report: ./.zaude/microscope/2026-04-18T14-30-00Z/report.md
+```
+
+---
+
 ## `/ship` — the shipping workflow
 
 ### What it does
@@ -991,6 +1154,7 @@ The full list of things that STOP each command. Useful to skim before you run on
 | `/review` | Never stops — always reports |
 | `/decision-map` | Empty question; scope classifier rejects non-technical; settled decision without `--revisit`; vault context too thin; every option FAILs hard-rule compliance |
 | `/e2e-test` | Missing `.git/`; `--ref` unresolvable; no supported ecosystem detected; disk free <500 MB; detached HEAD without explicit `--ref`. All are preflight errors (not verdicts). |
+| `/microscope` | Missing `.git/`; no `--test` and no scrollback match; test binary not resolvable; disk <500 MB; unknown `--layers` value; `--rerun >1`. All are preflight errors (not verdicts). Unrecognized runner degrades to `raw` mode, doesn't halt. |
 | `/ship` | Reviewer CRITICAL or HIGH; pre-commit hook failed; project push rejected; vault has unrelated changes; vault remote has newer commits |
 | `/wrap` | code-reviewer returns CRITICAL or HIGH on uncommitted work; vault remote has newer commits |
 
@@ -1034,5 +1198,6 @@ See also the source of each command:
 - [`review.md`](../templates/claude-config/commands/review.md)
 - [`decision-map.md`](../templates/claude-config/commands/decision-map.md)
 - [`e2e-test.md`](../templates/claude-config/commands/e2e-test.md)
+- [`microscope.md`](../templates/claude-config/commands/microscope.md)
 - [`ship.md`](../templates/claude-config/commands/ship.md)
 - [`wrap.md`](../templates/claude-config/commands/wrap.md)

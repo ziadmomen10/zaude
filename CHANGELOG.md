@@ -24,6 +24,18 @@ All notable changes to Zaude are documented here. This project follows [Keep a C
 
 ### Added
 
+#### `/microscope` — eighth slash command
+
+- **`/microscope`** — live-audit a test run. Pre-loads the test file + function-under-test (depth-1 imports, capped at 15 files or 3,000 lines) + fixtures + recent git diff BEFORE execution, then streams runner events in real time via `Bash run_in_background=true` + `Monitor`, falling back to synchronous+buffered mode when streaming is unavailable (flagged as `Streaming mode: degraded-buffered`). Emits a ranked root-cause hypothesis list with mechanical grading: HIGH = event↔context link + (diff corroboration OR structural bug visible); MEDIUM = event link alone; LOW = reasoned guess. Each hypothesis cites file:line + code snippet, streamed event timestamp, fix sketch (prose, not diff), verification command.
+  - `templates/claude-config/commands/microscope.md` (NEW) — 6-phase skill file (preflight → context-load → instrumentation-plan → live-execution → synthesis → emit). Recognized runners in v1: vitest, jest, mocha, pytest, go test, playwright, cypress — each with a concrete regex row for event classification. Unrecognized runners fall back to `raw` mode with reduced narration.
+  - `docs/05-commands.md` — new section documenting phases, arguments, streaming contract, hypothesis grading, composition, artifacts. Worked example demonstrates HIGH hypothesis with diff corroboration.
+- **Narration rate-limit.** One annotation per event class per event (runner-start / test-start / test-result / assertion-fail / error / hook). Everything else silently collapsed into `run.log` + `events.jsonl`. Prevents noisy test suites from blowing the token budget.
+- **Agent dispatch for `/microscope`.** `code-reviewer` always-on (unless `--no-agents`); `security-auditor` conditional on auth-context path match (reuses `/e2e-test`'s narrowed glob list); `architect-review` REVIEW mode conditional on cross-module hypothesis (≥2 modules cited as bug location). Max 3 agents. Typical run: 1.
+- **Six flags for `/microscope`** — `--test` (passed verbatim), `--focus` (narrow context), `--layers` (runner/code/types/logs in v1), `--timeout` (per-phase seconds), `--rerun` (v1 honors 1 only; flake detection v1.1), `--no-agents` (skip Phase 4 for fast iteration).
+- **Artifact directory** `.zaude/microscope/<ISO-timestamp>/` parallel to `/e2e-test`: `run.log`, `plan.json`, `hypotheses.json`, `report.md`, `events.jsonl` (JSONL of every streamed event with classification), `context/` subdir snapshotting every file loaded in Phase 1 for post-hoc reproducibility.
+- **Copy-paste suggestion in `/e2e-test` HOLD output.** When `/e2e-test` returns HOLD with a specific layer failure, the Recommendation section now includes `Drill further: /microscope --test="<failing-layer-command>"`. Suggestion only, not auto-invocation — `/microscope` remains strictly manual. This is the single documented cross-command integration between the two test-time commands.
+- **`JUDGMENT CALL:` markers** used in `/microscope` skill file at two points where judgment is unavoidable (tied hypothesis ranking, ambiguous event classification). Mechanical rules get no marker; judgment calls get flagged explicitly so Claude reading the skill knows where the spec stops and interpretation begins. Pattern adoptable by other commands.
+
 #### CI — GitHub Actions 3-OS matrix
 
 - **`.github/workflows/ci.yml`** (NEW) — syntax-checks matrix on `ubuntu-latest` + `macos-latest` + `windows-latest`. Covers Python stdlib compile on all hook `.py` files, bash parse on `install/install.sh` + `install/zaude-sync.sh` + `session-end-vault-sync.sh`, PowerShell parser on `install.ps1` (Windows leg only), and `json.load` validation across all tracked `.json` files. `concurrency` cancels superseded runs on the same ref. `fail-fast: false` so all OS legs run even if one fails.
@@ -57,6 +69,13 @@ All notable changes to Zaude are documented here. This project follows [Keep a C
 
 ### Design decisions in this release
 
+#### `/microscope`
+- **Live audit, not post-mortem.** `/microscope` attaches to a running test and narrates events as they stream; it is not a log parser. When streaming is unavailable, it degrades to buffered-annotation mode rather than refusing — the core value (context + hypothesis grounded in evidence) survives the downgrade. Explicitly flagged in the output header so users know which mode ran.
+- **v1 layers trimmed to `runner` + `code` + `types` + `logs`.** HTTP / DB / FS are v1.1+. HTTP requires per-framework hooks (Playwright's `page.on('response')` works; vitest/pytest don't have native equivalents). DB requires ORM-specific log wrappers (Prisma / SQLAlchemy / GORM — no universal pattern). FS requires OS-level tracing (strace / dtrace / ProcMon) — non-portable. v1 scope is what every runner reliably emits.
+- **Hard cap on Phase 1 context load.** 15 files / 3,000 lines at depth-1 imports. Prevents the "follow the import graph forever" token bomb. Cap-hit is flagged in output with `--focus` as the documented escape hatch.
+- **Hypothesis grading is mechanical.** HIGH requires direct event↔context evidence link AND (diff corroboration OR visible structural bug). No judgment-promoted hypotheses. Each hypothesis must cite code Claude actually loaded in Phase 1 — unloaded-code hypotheses emit as `unexplored — re-invoke with --focus`.
+- **No fix application, no test re-run.** The command is strictly a diagnostic; the user authors every fix and drives every iteration. Adoption-contract-style `go` signal for auto-applying fixes is NOT wired — hypothesis section is print-only like `/decision-map`'s draft entries.
+
 #### `/e2e-test`
 - **Continue-on-fail, never halt-fast.** Downstream layers are marked `INCONCLUSIVE` (distinct from `SKIP`) when an upstream failure invalidates them, but the command runs every layer it can. Rationale: the user gets a full picture on every run, not the first-failure-only view.
 - **Three-verdict model (not binary).** SHIP/HOLD was too blunt for a production-readiness gate. SHIP-WITH-CAUTION captures "the stack ran clean but coverage was incomplete" — scoped specifically to what the current increment actually touched, so a Node project with no integration tests is SHIP when the change didn't need integration coverage, SHIP-WITH-CAUTION when it did.
@@ -75,6 +94,11 @@ All notable changes to Zaude are documented here. This project follows [Keep a C
 - **`/build` does NOT auto-invoke `/decision-map`.** Auto-invocation creates a workflow loop. Users reach for the command themselves; `workflow-orchestrator` may *suggest* it.
 
 ### Verified
+
+#### `/microscope`
+- Design spec produced by `architect-review` in DESIGN mode before implementation. Substantive revisions to the draft incorporated: per-event-class rate-limit matrix replacing per-assertion streaming fantasy; mechanical scrollback invocation rule (most recent bash with non-zero exit + recognized runner pattern) replacing judgment-based detection; v1 layers trimmed to runner/code/types/logs (dropped HTTP/DB/FS to v1.1+); Phase 1 context load hard-capped at 15 files / 3,000 lines; degraded-buffered fallback when streaming unavailable (not a refusal); hypothesis grading made mechanical (event↔context link required for HIGH); agent dispatch capped at 3 (code-reviewer always + 2 conditional); `JUDGMENT CALL:` markers used at the two points where judgment is unavoidable (tied ranking, ambiguous event classification).
+- Implementation reviewed by `code-reviewer` + `architect-review` REVIEW mode before commit. Findings addressed in-place across HIGH and MEDIUM severities.
+- MVP scope discipline: HTTP/DB/FS layers, flake detection via `--rerun=N`, project-level `./.zaude/microscope.config.json` override for custom runners, `/e2e-test --drill-on-fail=<layer>` opt-in auto-invocation, dedicated `debugger` agent — all explicitly deferred to v1.1+ with rationale per item.
 
 #### `/e2e-test`
 - Design spec produced by `architect-review` in DESIGN mode before implementation. Revisions to the draft incorporated: flag axis collapsed to single `--profile`, `--ref` default corrected to merge-base, three-verdict model, continue-on-fail semantics, Phase 0 preflight gate, execution-plan preview, stack-detection scope trimmed to v1 ecosystems (Node/Python/Go), secret-scan surface corrected to cover tree + diff-since-ref (not diff-only).
