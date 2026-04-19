@@ -19,7 +19,7 @@ I want to install the Zaude framework from https://github.com/ziadmomen10/zaude.
 Zaude is a Claude Code framework that provides:
 - Persistent memory across sessions via a SessionStart hook
 - A structured vault pattern (CLAUDE.md, current-state.md, decisions.md, open-questions.md, sessions/)
-- Five slash commands (/start, /build, /review, /ship, /wrap)
+- Eight slash commands (/start, /build, /review, /decision-map, /e2e-test, /microscope, /ship, /wrap)
 - Credential hygiene and frozen-zone protection
 - Automatic git sync for both vault and config
 

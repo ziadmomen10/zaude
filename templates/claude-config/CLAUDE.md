@@ -8,13 +8,16 @@ This file configures Claude Code's behavior across every session on this machine
 
 ## Slash commands drive the workflow
 
-Five commands at `~/.claude/commands/` are the primary interface. Don't reinvent these with memorized phrases.
+Eight commands at `~/.claude/commands/` are the primary interface. Don't reinvent these with memorized phrases.
 
 | Command | What it does | When |
 |---|---|---|
 | **`/start`** | Reports where you left off. The `SessionStart` hook has already loaded the vault. | Beginning of every session |
 | **`/build <description>`** | Full chain: plan → design → implement → review (code / security / architecture). Stops for approval before commit. | Non-trivial features or refactors |
 | **`/review`** | Read-only review chain on uncommitted changes. Does not fix. | Before committing |
+| **`/decision-map <question>`** | Structured analysis of a stuck technical decision. Read-only — never writes to decisions.md. Ends with a recommendation; reply `go` to adopt. | When you're stuck between options |
+| **`/e2e-test`** | Production-readiness gate. Every applicable test layer + prod checklist + specialist review. Manual-invocation only (5–45 min). | Before shipping high-stakes increments |
+| **`/microscope <test>`** | Live-audit a test run: pre-load context, stream events, emit ranked root-cause hypotheses. Read-only. | When a test is failing and the stack trace alone isn't enough |
 | **`/ship`** | Review → commit → push → vault update. Stops on CRITICAL/HIGH. | Shipping a confirmed feature |
 | **`/wrap`** | Session wrap: review, refresh current-state, write session log, append decisions, memory sweep, credential list, push vault. | End of every session |
 

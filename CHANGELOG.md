@@ -6,6 +6,14 @@ All notable changes to Zaude are documented here. This project follows [Keep a C
 
 ## [Unreleased]
 
+### Fixed
+
+#### v0.5.1 polish — LOW-backlog cleanup across seven files
+
+- **Cross-doc "five commands" drift resolved** — `docs/01-introduction.md` (two places), `docs/02-installation.md`, `docs/03-architecture.md`, `docs/11-best-practices.md`, `install/setup-prompt.md`, and `templates/claude-config/CLAUDE.md` all now reference **eight commands** (adding `/decision-map`, `/e2e-test`, `/microscope` to the original five). CLAUDE.md's command table extended with three new rows. `CHANGELOG.md` v0.1.0 historical entry left untouched — it accurately reflects what shipped at the time.
+- **`/e2e-test` "Pre-pipeline phases" section label fixed** — was incorrectly labeling Phase 7 (synthesis) and Phase 8 (emit) as "pre-pipeline." These are post-pipeline. Renamed the section header to "Always-on phases" (captures pre + post mandatory phases without implying ordering) and added a parenthetical clarifying the distinction.
+- **`/e2e-test` debug-noise logger exclusion extended with underscore-separator patterns** — added `*_logger.*`, `*_logging.*`, `*_log.ts|js|py|go`. Go (`snake_case` by convention) and some Python projects use underscore-separated logger filenames (`application_logger.py`, `app_log.go`); the prior hyphen-only patterns missed these, producing false-positive MEDIUM findings on legitimate loggers. Backward-compatible — hyphen patterns still work.
+
 ### Added
 
 #### Agent expansion v0.5 — PR 4 (Tier 3 opt-in: mcp-developer) — v0.5 agent roster complete

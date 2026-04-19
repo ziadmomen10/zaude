@@ -432,6 +432,6 @@ Your vault content is untouched by upgrades — the installer only touches `~/.c
 |---|---|
 | Understand the system you just installed | [03 — Architecture](./03-architecture.md) |
 | Learn the vault layout | [04 — Vault pattern](./04-vault.md) |
-| Use the five slash commands | [05 — Commands](./05-commands.md) |
+| Use the eight slash commands | [05 — Commands](./05-commands.md) |
 
 See also: the [setup prompt](../install/setup-prompt.md), the [install.sh source](../install/install.sh), and [`config.sample.json`](../templates/claude-config/config.sample.json) for the config schema.

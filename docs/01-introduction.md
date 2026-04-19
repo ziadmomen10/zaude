@@ -40,7 +40,7 @@ The fixes aren't novel. What's novel is that Zaude makes them **mechanical** —
 **Zaude is** a bundle of files and conventions you install into Claude Code's existing extension points:
 
 - **Hooks** at `~/.claude/hooks/` — small Python and shell scripts that run on session start, before tool calls, and on session end
-- **Slash commands** at `~/.claude/commands/` — five commands (`/start`, `/build`, `/review`, `/ship`, `/wrap`) that drive the standard workflow
+- **Slash commands** at `~/.claude/commands/` — eight commands (`/start`, `/build`, `/review`, `/decision-map`, `/e2e-test`, `/microscope`, `/ship`, `/wrap`) that drive the standard workflow
 - **A global `CLAUDE.md`** at `~/.claude/CLAUDE.md` — the base behavior template
 - **A vault** (by default at `~/zaude-vault/`) — a git-tracked directory of per-project knowledge
 - **A config file** at `~/.zaude/config.json` — paths, project mappings, frozen zones
@@ -228,6 +228,6 @@ What you **won't** experience:
 | Install Zaude on your machine | [02 — Installation](./02-installation.md) |
 | Understand how the pieces fit together | [03 — Architecture](./03-architecture.md) |
 | Learn the vault layout and file formats | [04 — Vault pattern](./04-vault.md) |
-| Master the five slash commands | [05 — Commands](./05-commands.md) |
+| Master the eight slash commands | [05 — Commands](./05-commands.md) |
 
 If you're unsure whether Zaude is worth the setup cost, read the [architecture doc](./03-architecture.md) next — it walks through a complete session so you can judge whether the ergonomics match what you want.

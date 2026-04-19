@@ -188,9 +188,9 @@ Failures (no remote, push rejected, commit blocked by pre-commit hook) are logge
 
 ---
 
-## The five slash commands
+## The eight slash commands
 
-Slash commands are markdown files under `~/.claude/commands/`. When you type `/<name>`, Claude Code loads that file and treats it as a prompt. Zaude ships five.
+Slash commands are markdown files under `~/.claude/commands/`. When you type `/<name>`, Claude Code loads that file and treats it as a prompt. Zaude ships eight: the original five workflow commands (`/start`, `/build`, `/review`, `/ship`, `/wrap`) plus three v0.4+ specialists (`/decision-map`, `/e2e-test`, `/microscope`).
 
 ```mermaid
 flowchart TD

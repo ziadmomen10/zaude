@@ -26,7 +26,7 @@ Do NOT run this as part of `/ship` or `/wrap`. It is opt-in for the user who wan
 
 ### Profile × Layer matrix (authoritative)
 
-Pre-pipeline phases (Phase 0 preflight, Phase 1 stack-detect, Phase 2 increment-fit, Phase 7 synthesis, Phase 8 emit) **always run** regardless of profile — `quick` is not "skip synthesis", it's "skip expensive layers." The two always-on agents in Phase 7 (`architect-review` + `code-reviewer`) fire on every run.
+Always-on phases (Phase 0 preflight, Phase 1 stack-detect, Phase 2 increment-fit, Phase 7 synthesis, Phase 8 emit) **always run** regardless of profile — `quick` is not "skip synthesis", it's "skip expensive layers." The two always-on agents in Phase 7 (`architect-review` + `code-reviewer`) fire on every run. (Phase 7 and Phase 8 are post-pipeline, not pre-pipeline — but both always run. "Always-on" captures both the pre- and post-pipeline mandatory phases without implying ordering.)
 
 | Layer | `quick` | `default` | `deep` |
 |---|---|---|---|
@@ -274,7 +274,8 @@ Mechanical checks implemented as Claude's own pattern matching against the repo,
 4. **Debug noise in prod paths** — grep for `console.log`, `console.debug`, `print(`, `pprint.pprint`, `fmt.Println`, `fmt.Printf` in source files that are NOT test files (exclude paths matching `**/*test*`, `**/__tests__/**`, `**/tests/**`, `**/spec/**`, `**/*_test.*`), AND NOT inside a logger module. Logger exclusion rules — use separator-bounded patterns to avoid excluding `catalog.ts` / `blog.ts` / `changelog.ts` / `backlog.py`:
    - Path segment match: `/logger/`, `/logging/`, `/log/`
    - Exact filename match: `logger.ts`, `logger.js`, `logger.py`, `log.ts`, `log.js`, `log.py`, `log.go`, `logging.ts`, `logging.js`, `logging.py`
-   - Filename pattern match: `*-logger.*`, `*-logging.*`, `*-log.ts`, `*-log.js`, `*-log.py`, `*-log.go` (hyphen-separator required)
+   - Filename pattern match (hyphen-separator): `*-logger.*`, `*-logging.*`, `*-log.ts`, `*-log.js`, `*-log.py`, `*-log.go`
+   - Filename pattern match (underscore-separator, common in Go / Python): `*_logger.*`, `*_logging.*`, `*_log.ts`, `*_log.js`, `*_log.py`, `*_log.go`
 
    Findings are MEDIUM — debug noise doesn't break prod but pollutes logs.
 5. **Missing error handlers at entry points** — inspect entry files (`index.*`, `main.*`, `app.*`, `server.*`, `__main__.py`, `main.go`) for top-level try/except/catch structures or framework-provided error handlers (`app.onError`, Express `(err, req, res, next)`, etc.). Entry files without any error handling are a MEDIUM finding.

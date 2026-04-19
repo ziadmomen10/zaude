@@ -423,7 +423,7 @@ Full list of things that require announcement lives in the global `CLAUDE.md` te
 
 ## On discipline vs velocity
 
-Some days Zaude feels like friction. `/start` reports, `/build` plans, `/review` nitpicks, `/ship` gates, `/wrap` sweeps. That's five commands before you ship a one-line fix.
+Some days Zaude feels like friction. `/start` reports, `/build` plans, `/review` nitpicks, `/ship` gates, `/wrap` sweeps — and that's just the core five. Adding `/decision-map`, `/e2e-test`, `/microscope` on heavy lifts pushes it to eight commands before you ship a one-line fix.
 
 Two answers:
 
