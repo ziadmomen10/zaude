@@ -85,3 +85,7 @@ jobs:
 
           print("\nAll JSON files valid.")
           PY
+
+      - name: Agent docs parity (v0.5 VoltAgent specialist mentions)
+        shell: bash
+        run: python .github/ci/verify-agent-docs.py

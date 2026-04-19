@@ -6,6 +6,18 @@ All notable changes to Zaude are documented here. This project follows [Keep a C
 
 ## [Unreleased]
 
+### Added
+
+#### Agent expansion v0.5 — PR 1b (install automation + CI verification)
+
+- **`install/install.sh` extended with v0.5 agent installer.** New `install_voltagent_v05()` function clones `VoltAgent/awesome-claude-code-subagents`, copies all 11 v0.5 specialists to `~/.claude/agents/`, and generates 10 `-readonly` variants via the portable awk pattern (accessibility-tester stays source-read-only). Interactive prompt at end of install flow: *"Install the 11 v0.5 VoltAgent specialists + their readonly variants now? [y/N]"* — default yes. Writes a `~/.claude/agents/.zaude-manifest` file tracking every Zaude-installed agent filename for clean uninstall (`rm $(grep -v '^#' .zaude-manifest | xargs -I{} echo ~/.claude/agents/{})`). Graceful degradation: if VoltAgent clone fails, skip with a warning and point user at the manual awk snippet in `docs/08-agents.md`.
+- **`.github/ci/verify-agent-docs.py`** (NEW) — Python stdlib-only CI verification script. Hard-codes the canonical 11-agent v0.5 roster; verifies every agent name appears at least once in `templates/vault/03-patterns/agent-usage.md`, `docs/08-agents.md`, and `CHANGELOG.md`. Catches future doc drift where a new agent is added to the dispatch matrix but not the docs (or vice versa). Runs on all three OS legs of the existing CI matrix.
+- **`.github/workflows/ci.yml` extended with "Agent docs parity" step** — runs the verification script after the JSON validation step. Non-zero exit fails the CI leg and surfaces exactly which agent is missing from which file.
+
+**Not in this PR** (honestly deferred): PowerShell equivalent of the install-script extension. Windows users run the same install via Git Bash (already the documented + tested path for Zaude on Windows). A native PowerShell variant can land in a future polish PR if users report friction.
+
+**Install is now one-shot.** Users cloning the repo + running `install.sh` get the full 29-agent Zaude roster (14 wshobson manually per docs + 11 VoltAgent v0.5 via the interactive prompt). The docs/08-agents.md manual awk snippets remain as documentation for users who want to install outside the script, or want to selectively install subsets.
+
 ### Fixed
 
 #### v0.5.1 polish — LOW-backlog cleanup across seven files
