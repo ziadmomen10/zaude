@@ -8,6 +8,17 @@ All notable changes to Zaude are documented here. This project follows [Keep a C
 
 ### Added
 
+#### Agent expansion v0.5 — PR 3 (Tier 2 — 4 specialists)
+
+- **Roster expansion from 24 → 28 agents.** Four Tier 2 VoltAgent specialists ship in this PR: `react-specialist`, `docker-expert`, `documentation-engineer`, `accessibility-tester`. Each already had dispatch triggers in `agent-usage.md` from PR 1a — install-side only.
+- **`react-specialist` (`react-specialist-readonly`)** — React 18+ deep specialist (concurrent features, state-library selection, perf optimization, advanced patterns). Fires on `*.tsx`/`*.jsx` diffs with React-specific signals (`useMemo`/`useCallback`/`useTransition`/`useDeferredValue`/`Suspense`, or state-management-strategy changes). Runs sequentially after `frontend-developer` — FE-dev designs component shape; react-specialist tunes React-specific parts.
+- **`docker-expert` (`docker-expert-readonly`)** — Docker image build/optimize/secure (multi-stage, BuildKit, scanning, SBOM). Fires on `Dockerfile` / `docker-compose*.yml` / `.dockerignore` diffs. Parallel with `deployment-engineer` on PRs touching both Dockerfile + CI workflow.
+- **`documentation-engineer` (`documentation-engineer-readonly`)** — documentation-system architect (API docs, tutorials, static-site generators). Fires on >50% docs diffs or static-site generator config. Notable limitation: `haiku` model with no `Bash` tool (architecture + content, not build pipeline).
+- **`accessibility-tester`** — WCAG 2.1/3.0 compliance testing, ARIA verification, keyboard nav, color contrast. **Ships with source-level read-only tool surface** (no `-readonly` variant needed — Zaude's triggers reference the base name). Always-on at `/e2e-test --profile=deep`, closing the prior "a11y layer skipped in v1" gap.
+- **`docs/08-agents.md` install block extended** — now copies all 10 Tier 1 + Tier 2 agents. Variant-generator awk loop covers all 9 write-capable ones; `accessibility-tester` explicitly excluded with a comment.
+- **`agent-usage.md` rollout-status line updated** — reflects Tier 1 + Tier 2 complete (10 agents); PR 4 `mcp-developer` opt-in pending.
+- **`README.md` count updated** — `24 → 28`; Tier 2 specialists listed by name.
+
 #### Agent expansion v0.5 — PR 2 (Tier 1 rest — 4 specialists)
 
 - **Roster expansion from 20 → 24 agents.** Four additional VoltAgent specialists ship in this PR: `sql-pro`, `python-pro`, `prompt-engineer`, `refactoring-specialist`. Each already had its dispatch trigger rule in `agent-usage.md` (shipped in PR 1), so PR 2 is install-side only — no skill file changes.

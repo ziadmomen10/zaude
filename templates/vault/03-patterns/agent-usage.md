@@ -65,7 +65,7 @@ Read-only variants (`<agent>-readonly`) are used by `/microscope`, `/e2e-test`, 
 | **`accessibility-tester`** | Diff touches JSX/TSX/Vue/HTML with `role=` / `aria-*` / `tabindex` / `alt=` / form fields / `<dialog>` / `<modal>` / `<button>`, OR request contains `a11y` / `accessibility` / `WCAG` / `screen reader` / `keyboard nav` / `focus trap` / `contrast` | Diff is pure CSS with no semantic structure change — BUT fires anyway if color contrast is touched |
 | **`mcp-developer`** | Diff touches `.claude/mcp*.json`, MCP server code (`@modelcontextprotocol/sdk` in deps, `mcp` package in `pyproject`), MCP tool definition, OR request contains `MCP server` / `MCP tool` / `JSON-RPC 2.0` / `Model Context Protocol` | Change is config-only (adding a known server to `.claude/mcp.json`) with no code touched |
 
-**v0.5 rollout status:** PR 1 pilots `debugger` and `postgres-pro` live. PR 2 adds `sql-pro`, `python-pro`, `prompt-engineer`, `refactoring-specialist` — Tier 1 complete (6 agents). PR 3 adds Tier 2 (`react-specialist`, `docker-expert`, `documentation-engineer`, `accessibility-tester`). PR 4 adds `mcp-developer` opt-in.
+**v0.5 rollout status:** PR 1-2 delivered Tier 1 (6 agents: `debugger`, `postgres-pro`, `sql-pro`, `python-pro`, `prompt-engineer`, `refactoring-specialist`). PR 3 adds Tier 2 (4 agents: `react-specialist`, `docker-expert`, `documentation-engineer`, `accessibility-tester`). Tier 1 + Tier 2 live as of PR 3 (10 specialists). PR 4 adds `mcp-developer` opt-in (11th specialist). Install-script automation (PR 1b) still pending.
 
 ---
 
