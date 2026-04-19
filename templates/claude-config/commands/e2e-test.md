@@ -301,6 +301,9 @@ Dispatch **2 always-on + up to 3 conditional** agents. Input to each agent is pr
 | `security-auditor` | Secret-scan flagged, OR dep-audit flagged HIGH+, OR diff touches one of the specific auth-context path patterns listed below | Diff vs `--ref` (capped: file-level summary if diff >2000 lines) + dep-audit output + secret-scan output |
 | `test-automator` | Any test layer failed, OR coverage dropped >5 percentage points vs `--ref`, OR zero tests in any ecosystem that has source files | Test results per layer + coverage diff |
 | `performance-engineer` | `--profile=deep` AND Lighthouse/perf ran AND found regression against any configured baseline | Lighthouse JSON + Core Web Vitals + build-size diff |
+| `postgres-pro-readonly` (v0.5+) | Diff touches `*.sql` / `**/migrations/**` / Postgres-specific code paths per `agent-usage.md` mechanical trigger | Migration diff + schema context + Phase 2 increment-fit on DB surfaces |
+| `docker-expert-readonly` (v0.5+) | Diff touches `Dockerfile` / `docker-compose*.yml` / `.dockerignore`, OR Phase 6 prod-checklist flags container issues | Container files diff + build output + scan results |
+| `accessibility-tester` (v0.5+) | **Always at `--profile=deep`** in the a11y layer — replaces the prior "a11y layer skipped in v1" gap | UI-changed files + Phase 5 a11y audit output |
 
 **Typical dispatch: 2 agents.** Maximum: 5. Matches `/decision-map` conservatism when signal is absent, scales up only with specific signal.
 

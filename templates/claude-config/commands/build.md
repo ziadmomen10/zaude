@@ -27,6 +27,10 @@ Build the feature described in $ARGUMENTS using the full workflow chain. Each st
 - If `code-reviewer`, `security-auditor`, or `architect-review` returns CRITICAL or HIGH findings, stop and report. Do NOT proceed to commit.
 - Trigger rules (non-negotiable): `security-auditor` on any auth/crypto/SSH/credentials/input-validation diff; `code-reviewer` on any code change; `architect-review` on any structural change (new service, new route, new middleware, new schema table, new major component).
 
+## Agent dispatch — single source of truth
+
+For the full 29-agent dispatch matrix (including the v0.5 VoltAgent specialists: `debugger`, `postgres-pro`, `sql-pro`, `python-pro`, `prompt-engineer`, `refactoring-specialist`, `react-specialist`, `docker-expert`, `documentation-engineer`, `accessibility-tester`, `mcp-developer`), read `03-patterns/agent-usage.md` — loaded into context by `SessionStart`. The matrix defines mechanical triggers, hard-overlap precedence rules, and the 5-agent dispatch cap. Never duplicate those rules inline in this file.
+
 ## Arguments
 
 $ARGUMENTS — the feature or task description to build. Be specific: which files, which pages, which API endpoints, what behavior.

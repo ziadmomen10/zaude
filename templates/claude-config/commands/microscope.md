@@ -229,10 +229,16 @@ Claude emits **at most one annotation per streamed event class per event**. Ever
 | Agent | Fires when | Input |
 |---|---|---|
 | `code-reviewer` | Always (unless `--no-agents`) | Phase 1 context (test + function-under-test + fixtures) + streamed events + top-3 hypotheses |
+| `debugger-readonly` | Always (unless `--no-agents`) — paired with `code-reviewer` | Same as `code-reviewer` plus the live trace events JSONL |
 | `security-auditor` | Test file OR function-under-test path matches the same auth-context glob list as `/e2e-test` (`**/auth/**`, `**/auth.*`, `**/authentication/**`, `**/crypto/**`, `**/crypto.*`, `**/session/**`, `**/session.*`, `**/credentials.*`, `**/secrets.*`, `**/*.pem`, `**/*.key`, `**/id_rsa*`, `**/id_ed25519*`, `**/authorized_keys`, `**/known_hosts`, `**/auth-token*`, `**/access-token*`, `**/refresh-token*`, `**/password-hash*`, `**/password-reset*`, `**/jwt*.{ts,js,py,go}`, `**/oauth*.{ts,js,py,go}`) | Context + diff within auth-context paths |
 | `architect-review` REVIEW mode | Claude's hypothesis cites ≥2 modules as the bug location (cross-module interface failure) | Hypothesis text + cross-module files |
+| `postgres-pro-readonly` | Test-under-scope hits `.sql` / migrations / Postgres-specific code paths (per `agent-usage.md` dispatch trigger) | Phase 1 DB-related files + streamed SQL events |
+| `python-pro-readonly` | Runner = pytest AND `--focus` contains `*.py` OR Phase 1 loaded >200 Python lines | Phase 1 Python files + streamed test events |
+| `react-specialist-readonly` | Runner = vitest/jest/playwright/cypress AND test-file is `*.test.tsx`/`*.spec.tsx` AND project has React >=18 | Phase 1 React files + streamed render/hook events |
 
-**Dispatch cap: 3 agents.** Typical run: 1 (`code-reviewer`). Max: 3.
+**Dispatch cap: 5 agents.** Typical run: 2 (`code-reviewer` + `debugger-readonly`). Max: 5.
+
+> **Closed in v0.5:** earlier versions noted "no dedicated debugger agent in the roster — Claude itself orchestrates." This gap is now closed by `debugger-readonly` as an always-on Phase 4 specialist. The command's hypothesis quality improves with a debugger-specialist reviewing alongside `code-reviewer`.
 
 **Missing agent:** flag in Agent findings section, proceed. Never halt.
 

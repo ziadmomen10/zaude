@@ -37,3 +37,7 @@ End-of-session wrap-up. Leaves both the project repo and the vault in a clean, d
 - If the vault has unrelated uncommitted changes (from another project), do NOT bundle them — commit only `01-projects/<current project>/` and any shared `03-patterns/` changes.
 - If the push to the vault is rejected because the remote has newer commits, STOP — do NOT force-push. Ask the user to reconcile.
 - Tokens don't matter — never skip a step or a scan to save context. This includes the memory sweep (step 6) and credential scan (step 7); always run both even if the session felt light.
+
+## Agent dispatch — single source of truth
+
+Step 1's `code-reviewer` pass extends per the v0.5 dispatch matrix in `03-patterns/agent-usage.md`. When uncommitted work touches Python hooks, `python-pro-readonly` fires alongside `code-reviewer`. When it touches skill/agent `.md` files, `prompt-engineer-readonly` fires. When docs are >50% of the diff, `documentation-engineer-readonly` fires. All `-readonly` variants — `/wrap` remains read-only on the project repo.

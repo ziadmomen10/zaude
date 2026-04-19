@@ -2,7 +2,7 @@
 
 Claude Code agents (a.k.a. sub-agents) are specialized Markdown-defined personas Claude can invoke during a session. Each one is a small system prompt plus a curated tool surface. When the main Claude delegates to an agent, the agent runs in its own sub-conversation and reports back — the main thread doesn't carry the agent's working context.
 
-Zaude doesn't ship agents itself. It's *designed around* an 18-agent set — 14 from [`wshobson/agents`](https://github.com/wshobson/agents) and 4 from [`VoltAgent/awesome-claude-code-subagents`](https://github.com/VoltAgent/awesome-claude-code-subagents) — that the slash commands invoke at the right moments.
+Zaude doesn't ship agents itself. It's *designed around* a **29-agent set** (as of v0.5) — 14 from [`wshobson/agents`](https://github.com/wshobson/agents) and 15 from [`VoltAgent/awesome-claude-code-subagents`](https://github.com/VoltAgent/awesome-claude-code-subagents) — that the slash commands invoke at the right moments. Write-capable specialists also ship `-readonly` variants used by read-only commands (`/microscope`, `/e2e-test`, `/decision-map`, review chains).
 
 ---
 
@@ -50,20 +50,78 @@ cp zaude-agents-wshobson/*.md ~/.claude/agents/
 
 ### Install VoltAgent subagents
 
-[github.com/VoltAgent/awesome-claude-code-subagents](https://github.com/VoltAgent/awesome-claude-code-subagents) — orchestration + developer agents.
+[github.com/VoltAgent/awesome-claude-code-subagents](https://github.com/VoltAgent/awesome-claude-code-subagents) — orchestration + developer agents + v0.5 specialists.
 
 ```bash
 cd ~/src
 gh repo clone VoltAgent/awesome-claude-code-subagents zaude-agents-voltagent
 
-# Copy the 4 agents Zaude's commands drive
+# Copy the 4 core orchestration agents (v0.1+)
 for agent in backend-developer frontend-developer design-bridge workflow-orchestrator; do
-  # The repo organizes agents in subfolders; check the repo tree for exact paths.
   find zaude-agents-voltagent -name "${agent}.md" -exec cp {} ~/.claude/agents/ \;
+done
+
+# Copy the 2 v0.5 PR 1 pilot specialists (currently shipped)
+for agent in debugger postgres-pro; do
+  find zaude-agents-voltagent -name "${agent}.md" -exec cp {} ~/.claude/agents/ \;
+done
+
+# The remaining 9 v0.5 agents (sql-pro, python-pro, prompt-engineer, refactoring-specialist,
+# react-specialist, docker-expert, documentation-engineer, accessibility-tester, mcp-developer)
+# are documented in the Mechanical Triggers table below for forward reference but SHIP ACROSS
+# PRs 2-4. Installing them now is safe (skill files use graceful-skip for missing agents), but
+# they will sit idle until their trigger-rule wiring lands in the corresponding PR. If you want
+# to install them early anyway:
+# for agent in sql-pro python-pro prompt-engineer refactoring-specialist react-specialist \
+#              docker-expert documentation-engineer accessibility-tester mcp-developer; do
+#   find zaude-agents-voltagent -name "${agent}.md" -exec cp {} ~/.claude/agents/ \;
+# done
+```
+
+> The VoltAgent repo has reorganized a few times. If `find` doesn't locate an agent, browse the repo on GitHub and grab the latest path. All 11 v0.5 agents live under `categories/<NN-section>/`. A future Zaude install script will automate this (v0.5 PR 1b).
+
+### Generate read-only variants (required for v0.5 specialists)
+
+Write-capable v0.5 agents need `-readonly` variants for Zaude's read-only commands. In PR 1, only the 2 pilots (`debugger`, `postgres-pro`) are wired, so generate their variants first:
+
+```bash
+# Portable across GNU sed (Linux, Git Bash on Windows) and BSD sed (macOS) via awk only
+for agent in debugger postgres-pro; do
+  src="$HOME/.claude/agents/${agent}.md"
+  dst="$HOME/.claude/agents/${agent}-readonly.md"
+
+  [ -f "$src" ] || { echo "Skipping ${agent}: not installed"; continue; }
+
+  # Rewrite frontmatter and prepend the Zaude read-only preamble in one awk pass
+  awk -v agent="$agent" '
+    BEGIN { fm=0; done_preamble=0 }
+    /^---$/ {
+      fm++
+      print
+      # After closing frontmatter, inject preamble exactly once
+      if (fm == 2 && !done_preamble) {
+        print ""
+        print "> **Zaude read-only mode.** You are invoked by a Zaude command that forbids source-file mutation. Do NOT attempt to write or edit files — your declared tool surface does not permit it, and the command'\''s sandbox will block any such attempt. Produce findings, plans, and recommendations only. A separate implementation agent applies changes (out of your scope)."
+        print ""
+        done_preamble=1
+      }
+      next
+    }
+    fm == 1 && /^name:/            { print "name: " agent "-readonly"; next }
+    fm == 1 && /^tools:/            { print "tools: Read, Grep, Glob, Bash"; next }
+    fm == 1 && /^description:/      { print $0 " (READ-ONLY variant for Zaude read-only commands)"; next }
+    { print }
+  ' "$src" > "$dst"
+
+  echo "Generated ${agent}-readonly"
 done
 ```
 
-> The VoltAgent repo has reorganized a few times. If `find` doesn't locate an agent, browse the repo on GitHub and grab the latest path for `backend-developer.md`, `frontend-developer.md`, `design-bridge.md`, and `workflow-orchestrator.md` manually.
+**Portability:** pure awk — works on macOS (BSD awk), Linux (GNU gawk), Windows Git Bash (gawk). Avoids `sed -i`, which has incompatible flag semantics between GNU and BSD variants.
+
+**For the remaining 9 v0.5 agents that land in PRs 2-4:** run the same loop with their names when you install them. An automated cross-platform install script lands in PR 1b.
+
+**`accessibility-tester` is already read-only in its source** (verified at the VoltAgent commit referenced by Zaude's install; re-check if VoltAgent renames or retools it). No `-readonly` variant needed. Zaude's trigger rules use the base name `accessibility-tester` directly.
 
 ### Verify
 
@@ -73,11 +131,11 @@ After copying, open a Claude Code session and type:
 What agents do I have available?
 ```
 
-You should see all 18 in the reply. If not, check `~/.claude/agents/` directly — each agent is a standalone `.md` and the filename becomes the agent name.
+You should see all 29 in the reply (14 wshobson + 15 VoltAgent; the 10 `-readonly` variants are listed separately by their distinct names). If not, check `~/.claude/agents/` directly — each agent is a standalone `.md` and the filename becomes the agent name.
 
 ---
 
-## The 18 agents Zaude's commands are designed around
+## The 29 agents Zaude's commands are designed around
 
 ### From [`wshobson/agents`](https://github.com/wshobson/agents) — 14 specialists
 
@@ -98,7 +156,9 @@ You should see all 18 in the reply. If not, check `~/.claude/agents/` directly �
 | `test-automator` | Test-suite design, flaky-test triage | Task-match: building out tests from scratch |
 | `typescript-pro` | Advanced TS — generics, conditional / mapped types | Task-match: complex type puzzles |
 
-### From [`VoltAgent/awesome-claude-code-subagents`](https://github.com/VoltAgent/awesome-claude-code-subagents) — 4 orchestrators
+### From [`VoltAgent/awesome-claude-code-subagents`](https://github.com/VoltAgent/awesome-claude-code-subagents) — 15 agents (4 core + 11 v0.5 specialists)
+
+**4 core orchestration agents (v0.1+)**
 
 | Agent | Role | When it runs |
 |---|---|---|
@@ -106,6 +166,24 @@ You should see all 18 in the reply. If not, check `~/.claude/agents/` directly �
 | `design-bridge` | Pulls the relevant `DESIGN.md` rules for the feature being built | Frontend `/build` start |
 | `backend-developer` | Designs API shape, service layer, schema, error semantics (pre-implementation) | Backend `/build` after orchestrator |
 | `frontend-developer` | Designs component names, props, file paths, styling recipes (pre-implementation) | Frontend `/build` after design-bridge |
+
+**11 v0.5 specialists**
+
+| Agent | Role | Primary trigger | Readonly variant? |
+|---|---|---|---|
+| `debugger` | Diagnose bugs, identify root causes, analyze logs / stack traces | Test failure in scrollback OR user asks to "debug" / "diagnose" | Yes — `debugger-readonly` (always-on in `/microscope` Phase 4) |
+| `postgres-pro` | Postgres-ONLY expert: vacuum, WAL, replication, JSONB, GIN/BRIN, partitioning | Diff touches `*.sql` / migrations / Postgres-specific code | Yes — `postgres-pro-readonly` |
+| `sql-pro` | Cross-RDBMS: CTEs, window functions, ANSI-standard patterns | Raw SQL file / stored procedure (non-Postgres-exclusive) | Yes — `sql-pro-readonly` |
+| `python-pro` | Modern Python 3.11+: type hints, async, pytest, Pydantic, FastAPI/Django/Flask | Diff touches `*.py` with non-trivial content | Yes — `python-pro-readonly` |
+| `prompt-engineer` | Design/optimize/test/evaluate LLM prompts | Diff touches prompt templates / agent `.md` / system-prompt strings | Yes — `prompt-engineer-readonly` |
+| `refactoring-specialist` | Transform poorly structured code into clean code, preserving behavior | User invokes `/build` with `refactor` / `restructure` / `extract` / `rename` | Yes — `refactoring-specialist-readonly` (used by `/decision-map` class=refactor) |
+| `react-specialist` | React 18+: concurrent features, state-management selection, perf, advanced patterns | React-18+ project AND diff touches `*.tsx`/`*.jsx` with perf/state-library signals | Yes — `react-specialist-readonly` |
+| `docker-expert` | Docker image build/optimize/secure; multi-stage, BuildKit, scanning, SBOM | Diff touches `Dockerfile`/`docker-compose*.yml`/`.dockerignore` | Yes — `docker-expert-readonly` |
+| `documentation-engineer` | Architect/build documentation systems (API docs, tutorials, static-site generators) | Diff is >50% docs OR user invokes docs command | Yes — `documentation-engineer-readonly` |
+| `accessibility-tester` | WCAG 2.1/3.0 compliance, ARIA verification, keyboard nav, color contrast | Diff touches UI with ARIA/role/alt/forms/dialogs/buttons; always at `/e2e-test --profile=deep` | **Not needed** — source is already read-only |
+| `mcp-developer` | Build/debug/optimize MCP servers and clients (TS/Python SDK) | Diff touches `.claude/mcp*.json` / MCP server code / MCP tool definitions | Yes — `mcp-developer-readonly` |
+
+For the authoritative mechanical trigger rules, hard-overlap precedence ladder, and 5-agent dispatch cap, see `03-patterns/agent-usage.md` — loaded into context by `SessionStart` on every session.
 
 ---
 

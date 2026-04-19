@@ -76,10 +76,10 @@ Then conditionally fire ONE additional agent, sequentially (not in parallel), us
 | `security` | `security-auditor` | Always |
 | `perf` | `performance-engineer` | Always |
 | `test` | `test-automator` | Always |
-| `data` | `security-auditor` | Schema includes PII, auth, credentials, or tokens |
+| `data` | `postgres-pro-readonly` (v0.5+) | Postgres-specific work (JSONB, GIN/BRIN, vacuum, replication, partitioning). See `03-patterns/agent-usage.md` mechanical trigger. Falls back to `security-auditor` if not Postgres AND schema includes PII/auth/credentials/tokens. |
 | `api` | `security-auditor` | API is public, auth'd, or accepts untrusted input |
-| `refactor` | `test-automator` | Refactor crosses module boundaries OR touches >10 files |
-| `dependency` | `security-auditor` | Dependency handles auth, crypto, input parsing, or network I/O |
+| `refactor` | `refactoring-specialist-readonly` (v0.5+) | Always — replaces prior `test-automator` dispatch. `refactoring-specialist` is the specialist for behavior-preserving restructure planning. |
+| `dependency` | `security-auditor` | Dependency handles auth, crypto, input parsing, or network I/O. `docker-expert-readonly` (v0.5+) if the dependency is a container image or `Dockerfile`. |
 | `structural`, `other` | None | — |
 
 **Hard cap: two agents per invocation.** If the decision legitimately needs three or more specialist dimensions, note explicitly in the output: "This decision has <X, Y, Z> dimensions. I ran <architect-review, second-agent>; the <third> dimension was not analyzed. Consider a follow-up `/decision-map` framed around the <third> tradeoff."

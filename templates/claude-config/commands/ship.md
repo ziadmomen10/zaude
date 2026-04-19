@@ -31,3 +31,7 @@ Complete the shipping workflow: review → commit → push → vault update. Sto
 - Vault has unrelated uncommitted changes → stop, report, do NOT bundle them into this commit
 
 Never skip hooks. Never force-push to main. Never bundle unrelated work.
+
+## Agent dispatch — single source of truth
+
+The review chain in step 1 uses the full 29-agent dispatch matrix from `03-patterns/agent-usage.md`. v0.5 specialists (`postgres-pro-readonly`, `python-pro-readonly`, `react-specialist-readonly`, `docker-expert-readonly`, `documentation-engineer-readonly`, `accessibility-tester`, etc.) fire conditionally per the matrix triggers. The 5-agent dispatch cap and precedence ladder apply. Read-only variants are used throughout — `/ship`'s review chain never mutates source.

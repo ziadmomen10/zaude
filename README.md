@@ -141,7 +141,7 @@ No prompts about context. No risk of an unreviewed commit. Every decision captur
 | **Vault pattern** | Opinionated layout: `01-projects/<slug>/{CLAUDE,current-state,decisions,open-questions,spec,architecture}.md` + `sessions/YYYY-MM-DD.md` + `03-patterns/` shared rules. Portable, git-trackable, diffable. | `~/zaude-vault/` |
 | **Memory system** | Four memory types (user, feedback, project, reference). Auto-memory writes during the session; `/wrap` sweeps for anything that slipped past. Tracked in a separate git repo from the vault. | `~/.claude/projects/<cwd>/memory/` |
 | **Auto-sync** | SessionEnd hook commits and pushes both the vault and your Claude-config repo. Framework improvements flow upstream to Zaude via `/zaude-push` (PR-only, never direct to main). | `hooks/session-end-vault-sync.sh` + `install/zaude-sync.sh` |
-| **Agent orchestration** | Triggers for 18 agents: `code-reviewer`, `architect-review`, `security-auditor`, `workflow-orchestrator`, `design-bridge`, `backend-developer`, `frontend-developer`, and the specialists (cloud, kubernetes, typescript, javascript, etc.). | `agents/` |
+| **Agent orchestration** | Triggers for 29 agents at v0.5 target (v0.5 PR 1 ships 20: 18 core + `debugger` + `postgres-pro`; remaining 9 specialists — `sql-pro`, `python-pro`, `prompt-engineer`, `refactoring-specialist`, `react-specialist`, `docker-expert`, `documentation-engineer`, `accessibility-tester`, `mcp-developer` — land across PRs 2-4). Core set: `code-reviewer`, `architect-review`, `security-auditor`, `workflow-orchestrator`, `design-bridge`, `backend-developer`, `frontend-developer`, plus infra/language specialists. Write-capable specialists ship `-readonly` variants for Zaude's read-only commands. | `agents/` |
 
 ---
 
@@ -250,7 +250,7 @@ See also: [`examples/`](./examples/) — a complete worked example (the `notekit
 
 **Will it break my existing Claude Code setup?** No. The installer adds files to `~/.claude/` and never overwrites an existing `CLAUDE.md`. You can run Zaude alongside your current config.
 
-**Do I need all 18 agents?** No. Zaude works without them — you just lose the automated review chain in `/build`. Agents are easy to add later; see [docs/08-agents.md](./docs/08-agents.md).
+**Do I need all 29 agents?** No. Zaude works without them — you just lose the automated review chain in `/build`. The core is 18 (14 wshobson + 4 core VoltAgent); the 11 v0.5 specialists are additive and land incrementally across v0.5 PRs. Skill files degrade gracefully when an agent isn't installed. See [docs/08-agents.md](./docs/08-agents.md).
 
 **Does Zaude call the Anthropic API?** No. Zaude runs entirely inside Claude Code, which has its own authentication.
 

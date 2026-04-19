@@ -30,3 +30,7 @@ Unparameterized SQL query permits injection via `email` field.
 If NO findings, say so plainly: "Clean. N files reviewed, 0 findings."
 
 Do NOT commit anything. Do NOT modify any files. This command is read-only.
+
+## Agent dispatch — single source of truth
+
+For the full dispatch matrix (including v0.5 VoltAgent specialists), read `03-patterns/agent-usage.md`. Review chains invoke the `-readonly` variants of write-capable agents to preserve this command's read-only contract. Never duplicate dispatch rules inline in this file.

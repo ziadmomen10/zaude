@@ -6,6 +6,38 @@ All notable changes to Zaude are documented here. This project follows [Keep a C
 
 ## [Unreleased]
 
+### Added
+
+#### Agent expansion v0.5 — PR 1 (infrastructure + 2 pilot specialists)
+
+- **Roster expansion from 18 → 20 agents** (pilot of a planned 18 → 29 across four PRs). Two new VoltAgent specialists shipped in this PR: `debugger` and `postgres-pro`. Remaining 9 ship in PRs 2–4 (4 tier-1, 4 tier-2, 1 tier-3-opt-in).
+- **`debugger` (`debugger-readonly` for read-only commands)** — diagnose bugs, identify root causes, analyze logs / stack traces. **Closes the flagged gap in `/microscope`**: Phase 4 synthesis now dispatches `code-reviewer` + `debugger-readonly` as always-on pair (was `code-reviewer` alone). Dispatch cap raised from 3 to 5 to accommodate. Prior "no dedicated debugger agent in the roster" caveat removed.
+- **`postgres-pro` (`postgres-pro-readonly` for read-only commands)** — PostgreSQL-ONLY specialist for vacuum, WAL, replication, JSONB, GIN/BRIN, partitioning. Fires on diffs touching `*.sql` / `**/migrations/**` / `postgresql.conf` / Postgres-specific identifiers. Wired into `/build`, `/review`, `/ship`, `/decision-map` (class=data), `/e2e-test` (Phase 4), `/microscope` (Phase 4 conditional).
+- **`agent-usage.md` is now the single source of truth** for agent dispatch. New sections: "Mechanical triggers (v0.5+ VoltAgent specialists)" with 11 mechanical trigger rows, "Hard-overlap precedence" with 10 resolution rules for agent-pair conflicts, "Agent dispatch cap" with the 5-agent hard rule and precedence ladder (language-specialist > framework-specialist > generalist > reviewer). Loaded by `SessionStart` into every session.
+- **Skill files reference `agent-usage.md`** rather than duplicating dispatch rules. `build.md`, `review.md`, `ship.md`, `wrap.md`, `decision-map.md`, `e2e-test.md`, `microscope.md` each add a short section pointing to `agent-usage.md` as authoritative. No inline rule duplication.
+- **Read-only variant discipline documented.** Write-capable agents (9 of the 11 new specialists) ship `-readonly` variants that strip `Write`/`Edit` from their `tools:` frontmatter and prepend a Zaude-injected preamble ("Zaude read-only mode. Do NOT attempt to write or edit files…"). Read-only commands (`/microscope`, `/e2e-test`, `/decision-map`, review chains) invoke the `-readonly` variant by name. `docs/08-agents.md` now includes the variant-generation bash snippet; an automated install script follows in PR 1b.
+- **`docs/08-agents.md` refreshed** — 29-agent count throughout; new VoltAgent specialists table with 11 rows (role, primary trigger, readonly-variant-yes/no); explicit install commands for the 2 pilot agents in this PR; new "Generate read-only variants" section with the sed-based pattern.
+- **`/microscope` Phase 4 matrix extended** — `debugger-readonly` always-on, plus conditional `postgres-pro-readonly`, `python-pro-readonly`, `react-specialist-readonly` rows. Documentation updated so future readers see `debugger` as the closed-gap specialist, not a missing roster slot.
+- **`/decision-map` Step 4 matrix extended** — `data` classification now dispatches `postgres-pro-readonly` (Postgres-specific work) with fallback to `security-auditor` if PII/auth/credentials involved and not Postgres. `refactor` classification now dispatches `refactoring-specialist-readonly` (the specialist for behavior-preserving restructure planning) instead of `test-automator`. `dependency` classification adds `docker-expert-readonly` conditional.
+- **`/e2e-test` Phase 4 matrix extended** — `postgres-pro-readonly`, `docker-expert-readonly`, and `accessibility-tester` added as conditional rows. `accessibility-tester` is the new always-on agent at `--profile=deep`, replacing the prior "a11y layer skipped in v1" gap.
+
+### Design decisions in this release
+
+#### Agent expansion v0.5 PR 1
+- **Single source of truth for dispatch.** All mechanical triggers live in `templates/vault/03-patterns/agent-usage.md`. Skill files reference it; they never duplicate. SessionStart already loads the pattern file — no hook change needed.
+- **Read-only variants are deterministic, not judgment-based.** Write-capable agents invoked in read-only contexts would otherwise be "trust the model to not mutate" — which is judgment. A stripped-tools variant is mechanically enforced by the sandbox.
+- **Mechanical triggers only — no "Claude decides."** Every new dispatch rule is file-path glob, content regex, command-argument match, or prior classification. Anti-sycophancy discipline carried forward from `/decision-map`.
+- **Additive for new agents; two retargets in `/decision-map` Step 4.** Every new agent's dispatch rule is purely additive. Two existing `/decision-map` Step 4 class dispatches were retargeted to the new specialists: `data` class now uses `postgres-pro-readonly` (with `security-auditor` retained as fallback for PII/auth/credentials signals on non-Postgres stacks), `refactor` class now uses `refactoring-specialist-readonly` (replaces `test-automator`, which was a loose fit — refactoring-specialist is the purpose-built agent for behavior-preserving restructure planning). No other command contracts change; rollback is `git revert` + removing two agent files from `~/.claude/agents/`.
+- **Hard-overlap precedence is explicit, not negotiated.** 10 resolution rules for the pairs that could contradict (e.g., `postgres-pro` vs `backend-developer`, `react-specialist` vs `frontend-developer`). Each rule names the winner by signal and the both-fire condition when applicable.
+- **5-agent dispatch cap.** When trigger rules would fire more than 5 agents on a single turn, the precedence ladder suppresses lower-tier agents and the command's output flags the suppression ("Dispatch cap reached; X suppressed").
+
+### Verified
+
+#### Agent expansion v0.5 PR 1
+- Research spec produced via a dedicated agent that fetched all 13 source files (11 new VoltAgent agents + 2 existing VoltAgent agents for overlap baseline). No 404s. Every dispatch rule in `agent-usage.md` grounded in the actual source file's declared `tools:` frontmatter and body workflow.
+- Architectural plan delivered as v1 document with per-agent cards, tool-surface normalization rules, dispatch matrix, install specification, verification specification, rollback specification, failure-mode catalog, and phased rollout gates. Approved by user before implementation.
+- Implementation reviewed by `code-reviewer` + `architect-review` REVIEW mode before commit. Findings addressed in-place.
+
 ### Changed
 
 #### `/decision-map` — recommendation-at-end + `go` adoption contract

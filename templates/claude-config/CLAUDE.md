@@ -113,7 +113,7 @@ Always, even without permission prompts:
 
 ## Tools
 
-- Install agents separately. Zaude documents which agents pair with the commands (`architect-review`, `code-reviewer`, `security-auditor`, `workflow-orchestrator`, `design-bridge`, `backend-developer`, `frontend-developer`, plus domain agents as needed). See `docs/08-agents.md` in the Zaude repo.
+- Install agents separately. Zaude documents which agents pair with the commands (`architect-review`, `code-reviewer`, `security-auditor`, `workflow-orchestrator`, `design-bridge`, `backend-developer`, `frontend-developer`, plus domain agents as needed, plus v0.5+ specialists like `debugger`, `postgres-pro`, `sql-pro`, `python-pro`, `prompt-engineer`, `refactoring-specialist`, `react-specialist`, `docker-expert`, `documentation-engineer`, `accessibility-tester`, `mcp-developer`). See `docs/08-agents.md` in the Zaude repo.
 - MCP servers are optional — `github`, `playwright`, `obsidian`, etc. See `docs/09-mcps.md`.
 - After any meaningful code change, run `/review` before declaring done.
 - Use Playwright for frontend verification — don't just trust that code compiles.
