@@ -61,17 +61,15 @@ for agent in backend-developer frontend-developer design-bridge workflow-orchest
   find zaude-agents-voltagent -name "${agent}.md" -exec cp {} ~/.claude/agents/ \;
 done
 
-# Copy the 10 v0.5 Tier 1 + Tier 2 specialists (currently shipped as of PR 3)
+# Copy all 11 v0.5 specialists (Tier 1 + Tier 2 + Tier 3 opt-in — complete as of PR 4)
 for agent in debugger postgres-pro sql-pro python-pro prompt-engineer refactoring-specialist \
-             react-specialist docker-expert documentation-engineer accessibility-tester; do
+             react-specialist docker-expert documentation-engineer accessibility-tester \
+             mcp-developer; do
   find zaude-agents-voltagent -name "${agent}.md" -exec cp {} ~/.claude/agents/ \;
 done
-
-# The remaining 1 v0.5 agent (mcp-developer) is Tier 3 opt-in — ships in PR 4. Install it
-# now if you know you'll use it; skill files use graceful-skip for missing agents. Otherwise
-# wait for PR 4.
-# find zaude-agents-voltagent -name "mcp-developer.md" -exec cp {} ~/.claude/agents/ \;
 ```
+
+> `mcp-developer` is **opt-in** (Tier 3) — you only need it if you build your own MCP servers. Zero overhead if not triggered (trigger fires only on diffs touching MCP SDK imports or `.claude/mcp*.json`). Keep it in the loop anyway for completeness — the install cost is one file copy.
 
 > The VoltAgent repo has reorganized a few times. If `find` doesn't locate an agent, browse the repo on GitHub and grab the latest path. All 11 v0.5 agents live under `categories/<NN-section>/`. A future Zaude install script will automate this (v0.5 PR 1b).
 
@@ -84,7 +82,7 @@ Write-capable v0.5 agents need `-readonly` variants for Zaude's read-only comman
 # accessibility-tester is excluded — its source file already ships with a read-only tool
 # surface, so Zaude's triggers reference it by its base name (no variant needed).
 for agent in debugger postgres-pro sql-pro python-pro prompt-engineer refactoring-specialist \
-             react-specialist docker-expert documentation-engineer; do
+             react-specialist docker-expert documentation-engineer mcp-developer; do
   src="$HOME/.claude/agents/${agent}.md"
   dst="$HOME/.claude/agents/${agent}-readonly.md"
 
@@ -117,7 +115,7 @@ done
 
 **Portability:** pure awk — works on macOS (BSD awk), Linux (GNU gawk), Windows Git Bash (gawk). Avoids `sed -i`, which has incompatible flag semantics between GNU and BSD variants.
 
-**For the remaining Tier 3 agent (`mcp-developer`, opt-in in PR 4):** add it to the loop when you install. An automated cross-platform install script lands in PR 1b.
+**v0.5 roster complete as of PR 4.** All 11 VoltAgent specialists have install commands + variants (where applicable). An automated cross-platform install script replaces the manual loops in PR 1b.
 
 **`accessibility-tester` is already read-only in its source** (verified at the VoltAgent commit referenced by Zaude's install; re-check if VoltAgent renames or retools it). No `-readonly` variant needed. Zaude's trigger rules use the base name `accessibility-tester` directly.
 

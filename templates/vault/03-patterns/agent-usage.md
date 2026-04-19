@@ -65,7 +65,7 @@ Read-only variants (`<agent>-readonly`) are used by `/microscope`, `/e2e-test`, 
 | **`accessibility-tester`** | Diff touches JSX/TSX/Vue/HTML with `role=` / `aria-*` / `tabindex` / `alt=` / form fields / `<dialog>` / `<modal>` / `<button>`, OR request contains `a11y` / `accessibility` / `WCAG` / `screen reader` / `keyboard nav` / `focus trap` / `contrast` | Diff is pure CSS with no semantic structure change — BUT fires anyway if color contrast is touched |
 | **`mcp-developer`** | Diff touches `.claude/mcp*.json`, MCP server code (`@modelcontextprotocol/sdk` in deps, `mcp` package in `pyproject`), MCP tool definition, OR request contains `MCP server` / `MCP tool` / `JSON-RPC 2.0` / `Model Context Protocol` | Change is config-only (adding a known server to `.claude/mcp.json`) with no code touched |
 
-**v0.5 rollout status:** PR 1-2 delivered Tier 1 (6 agents: `debugger`, `postgres-pro`, `sql-pro`, `python-pro`, `prompt-engineer`, `refactoring-specialist`). PR 3 adds Tier 2 (4 agents: `react-specialist`, `docker-expert`, `documentation-engineer`, `accessibility-tester`). Tier 1 + Tier 2 live as of PR 3 (10 specialists). PR 4 adds `mcp-developer` opt-in (11th specialist). Install-script automation (PR 1b) still pending.
+**v0.5 rollout status (complete):** all 11 VoltAgent specialists live as of PR 4. Zaude's target 29-agent roster is reached (18 core + 11 v0.5 specialists). Install-script automation (PR 1b) still pending — users currently run the manual install + variant-generator awk loops documented in `docs/08-agents.md`.
 
 ---
 

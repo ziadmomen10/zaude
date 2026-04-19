@@ -8,6 +8,16 @@ All notable changes to Zaude are documented here. This project follows [Keep a C
 
 ### Added
 
+#### Agent expansion v0.5 — PR 4 (Tier 3 opt-in: mcp-developer) — v0.5 agent roster complete
+
+- **Final v0.5 specialist ships: `mcp-developer` (`mcp-developer-readonly`).** Build/debug/optimize MCP servers and clients. Fires on `.claude/mcp*.json` / `@modelcontextprotocol/sdk` in deps / `mcp` package in `pyproject` / MCP tool definitions. Tier 3 opt-in — zero overhead if not triggered.
+- **v0.5 target reached: 29 agents installable** (18 core + 11 VoltAgent specialists). All dispatch triggers live in `agent-usage.md` from PR 1a. Skill files reference the single source of truth; no inline dispatch rules.
+- **`docs/08-agents.md` install block is now complete** — one loop copies all 11 v0.5 specialists. Variant-generator awk loop covers the 10 write-capable (accessibility-tester still excluded with inline comment).
+- **`agent-usage.md` rollout-status line** reflects completion: v0.5 roster live; PR 1b (install-script automation) still pending.
+- **`README.md` updated** — agent orchestration row rewritten to enumerate all 29 agents with clear core-vs-specialist split; v0.5 rollout-phase language dropped now that the series is complete.
+
+Remaining from the v0.5 series: PR 1b (install.sh + install.ps1 automation + .zaude-manifest format + CI verify-agent-manifest script). User-facing install today uses the portable awk loops documented in `docs/08-agents.md` — functionally complete, just not automated.
+
 #### Agent expansion v0.5 — PR 3 (Tier 2 — 4 specialists)
 
 - **Roster expansion from 24 → 28 agents.** Four Tier 2 VoltAgent specialists ship in this PR: `react-specialist`, `docker-expert`, `documentation-engineer`, `accessibility-tester`. Each already had dispatch triggers in `agent-usage.md` from PR 1a — install-side only.
