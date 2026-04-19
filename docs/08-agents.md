@@ -61,19 +61,17 @@ for agent in backend-developer frontend-developer design-bridge workflow-orchest
   find zaude-agents-voltagent -name "${agent}.md" -exec cp {} ~/.claude/agents/ \;
 done
 
-# Copy the 2 v0.5 PR 1 pilot specialists (currently shipped)
-for agent in debugger postgres-pro; do
+# Copy the 6 v0.5 Tier 1 specialists (currently shipped as of PR 2)
+for agent in debugger postgres-pro sql-pro python-pro prompt-engineer refactoring-specialist; do
   find zaude-agents-voltagent -name "${agent}.md" -exec cp {} ~/.claude/agents/ \;
 done
 
-# The remaining 9 v0.5 agents (sql-pro, python-pro, prompt-engineer, refactoring-specialist,
-# react-specialist, docker-expert, documentation-engineer, accessibility-tester, mcp-developer)
-# are documented in the Mechanical Triggers table below for forward reference but SHIP ACROSS
-# PRs 2-4. Installing them now is safe (skill files use graceful-skip for missing agents), but
-# they will sit idle until their trigger-rule wiring lands in the corresponding PR. If you want
-# to install them early anyway:
-# for agent in sql-pro python-pro prompt-engineer refactoring-specialist react-specialist \
-#              docker-expert documentation-engineer accessibility-tester mcp-developer; do
+# The remaining 5 v0.5 agents (react-specialist, docker-expert, documentation-engineer,
+# accessibility-tester, mcp-developer) are documented in the Mechanical Triggers table below
+# for forward reference but SHIP IN PRs 3-4. Installing them now is safe (skill files use
+# graceful-skip for missing agents), but they will sit idle until their trigger-rule wiring
+# lands in the corresponding PR. If you want to install them early anyway:
+# for agent in react-specialist docker-expert documentation-engineer accessibility-tester mcp-developer; do
 #   find zaude-agents-voltagent -name "${agent}.md" -exec cp {} ~/.claude/agents/ \;
 # done
 ```
@@ -85,8 +83,8 @@ done
 Write-capable v0.5 agents need `-readonly` variants for Zaude's read-only commands. In PR 1, only the 2 pilots (`debugger`, `postgres-pro`) are wired, so generate their variants first:
 
 ```bash
-# Portable across GNU sed (Linux, Git Bash on Windows) and BSD sed (macOS) via awk only
-for agent in debugger postgres-pro; do
+# Portable across GNU awk (Linux, Git Bash on Windows) and BSD awk (macOS)
+for agent in debugger postgres-pro sql-pro python-pro prompt-engineer refactoring-specialist; do
   src="$HOME/.claude/agents/${agent}.md"
   dst="$HOME/.claude/agents/${agent}-readonly.md"
 
@@ -119,7 +117,7 @@ done
 
 **Portability:** pure awk — works on macOS (BSD awk), Linux (GNU gawk), Windows Git Bash (gawk). Avoids `sed -i`, which has incompatible flag semantics between GNU and BSD variants.
 
-**For the remaining 9 v0.5 agents that land in PRs 2-4:** run the same loop with their names when you install them. An automated cross-platform install script lands in PR 1b.
+**For the remaining 5 v0.5 agents that land in PRs 3-4:** run the same loop with their names when you install them. An automated cross-platform install script lands in PR 1b.
 
 **`accessibility-tester` is already read-only in its source** (verified at the VoltAgent commit referenced by Zaude's install; re-check if VoltAgent renames or retools it). No `-readonly` variant needed. Zaude's trigger rules use the base name `accessibility-tester` directly.
 

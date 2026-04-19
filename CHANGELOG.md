@@ -8,6 +8,17 @@ All notable changes to Zaude are documented here. This project follows [Keep a C
 
 ### Added
 
+#### Agent expansion v0.5 — PR 2 (Tier 1 rest — 4 specialists)
+
+- **Roster expansion from 20 → 24 agents.** Four additional VoltAgent specialists ship in this PR: `sql-pro`, `python-pro`, `prompt-engineer`, `refactoring-specialist`. Each already had its dispatch trigger rule in `agent-usage.md` (shipped in PR 1), so PR 2 is install-side only — no skill file changes.
+- **`sql-pro` (`sql-pro-readonly`)** — cross-RDBMS expert for CTEs, window functions, ANSI-standard patterns. Fires on raw `.sql` / stored procedure / view DDL when target isn't exclusively Postgres. Suppressed when `postgres-pro` is already firing (postgres-pro wins on Postgres-only work per the hard-overlap precedence rule).
+- **`python-pro` (`python-pro-readonly`)** — modern Python 3.11+ (type hints, async, Pydantic, pytest). Fires on `*.py` diffs above 20 lines OR touching async/type-annotation/Pydantic/FastAPI/Django/pytest-fixture surfaces. Notable meta-effect: **reviews every Zaude hook edit** via `/ship` and `/wrap` since all Zaude hooks are stdlib Python.
+- **`prompt-engineer` (`prompt-engineer-readonly`)** — LLM prompt design/optimization/evaluation. Fires on prompt-template files, system-prompt strings, LLM API call prompts >5 lines, `prompts/` or `templates/` dirs, or agent `*.md` with system-prompt body changes. Notable meta-effect: **fires on every Zaude skill-file / agent-file edit**, providing prompt-quality review on Zaude's own authoring surface.
+- **`refactoring-specialist` (`refactoring-specialist-readonly`)** — behavior-preserving code restructure planning. Fires on `/build` with keywords `refactor` / `restructure` / `clean up` / `extract` / `rename` / `deduplicate` / `simplify`. The behavior-preservation check is now the agent's own responsibility, not a dispatch condition (tightened from PR 1 per review findings). Wired into `/decision-map` Step 4 `refactor` class (shipped in PR 1, now backed by a real installed agent).
+- **`docs/08-agents.md` install block extended** — the install loop now includes all 6 Tier 1 agents. The variant-generation awk loop also extended to produce `-readonly` variants for all 6. The remaining 5 (Tier 2 + 3) are still documented for forward reference but deferred to PRs 3-4.
+- **`agent-usage.md` rollout-status line updated** — reflects PR 2 completing Tier 1 (6 agents live); PR 3 and PR 4 remain for Tier 2 (4 agents) and Tier 3 (1 agent opt-in).
+- **`README.md` count updated** — `20 → 24` agents as of PR 2; full roster of Tier 1 specialists listed by name.
+
 #### Agent expansion v0.5 — PR 1 (infrastructure + 2 pilot specialists)
 
 - **Roster expansion from 18 → 20 agents** (pilot of a planned 18 → 29 across four PRs). Two new VoltAgent specialists shipped in this PR: `debugger` and `postgres-pro`. Remaining 9 ship in PRs 2–4 (4 tier-1, 4 tier-2, 1 tier-3-opt-in).
