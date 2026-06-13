@@ -1,0 +1,62 @@
+{
+  "scenarios": [
+    {
+      "name": "edit source before design",
+      "unsafe": true,
+      "note": "the headline gate",
+      "v1": "allow",
+      "v2": "deny"
+    },
+    {
+      "name": "write .zaude/ trace (forge attempt)",
+      "unsafe": true,
+      "note": "tamper the source of truth",
+      "v1": "allow",
+      "v2": "deny"
+    },
+    {
+      "name": "forge state by appending a fake transition",
+      "unsafe": true,
+      "note": "fake 'Designed' to unlock edits",
+      "v1": "allow",
+      "v2": "deny"
+    },
+    {
+      "name": "deploy without a release token",
+      "unsafe": true,
+      "note": "ship-gate bypass",
+      "v1": "allow",
+      "v2": "deny"
+    },
+    {
+      "name": "edit source AFTER /approve",
+      "unsafe": false,
+      "note": "v2 must NOT over-block legit work",
+      "v1": "allow",
+      "v2": "allow"
+    },
+    {
+      "name": "deploy AFTER full ship chain (token active)",
+      "unsafe": false,
+      "note": "legit deploy allowed",
+      "v1": "allow",
+      "v2": "allow"
+    },
+    {
+      "name": "edit source before design WITH a logged waiver",
+      "unsafe": false,
+      "note": "bypass requires a recorded waiver",
+      "v1": "allow",
+      "v2": "allow"
+    },
+    {
+      "name": "edit in a NON-onboarded project",
+      "unsafe": false,
+      "note": "fail-open: 21 projects untouched",
+      "v1": "allow",
+      "v2": "allow"
+    }
+  ],
+  "unsafe_blocked_by_v2": 4,
+  "v2_overblock": 0
+}

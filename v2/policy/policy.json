@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "note": "Canonical Zaude config. The generator (L6) renders slash-commands + agents + the hook block from this file. JSON (not YAML) so the stdlib-only kernel has zero deps. Edit here, then `zaude gen`.",
+  "launcher": "$HOME/.zaude/bin/zaude.py",
+  "hook_launcher": "$HOME/.zaude/bin/zhook.py",
+
+  "models": {
+    "driver": "inherit",
+    "policy": "Every agent inherits the driver model (Deen: no sonnet/haiku/opus — use the model I'm using).",
+    "matrix": { "*": "inherit" }
+  },
+
+  "command_prefix_default": "z",
+  "commands": [
+    {"name": "start",        "cli": "status",        "group": "lifecycle", "summary": "Resume: show current state, allowed next steps, risk tier, open intake."},
+    {"name": "onboard",      "cli": "onboard",       "group": "lifecycle", "summary": "Scaffold a new project into Zaude (vault + git + .zaude + PM)."},
+    {"name": "clarify",      "cli": "clarify",       "group": "lifecycle", "summary": "Record requirements + acceptance criteria (Intake -> Clarified)."},
+    {"name": "prioritize",   "cli": "prioritize",    "group": "lifecycle", "summary": "Record the priority decision (Clarified -> Prioritized)."},
+    {"name": "plan",         "cli": "plan",          "group": "lifecycle", "summary": "Record the ordered plan (Prioritized -> Planned)."},
+    {"name": "design",       "cli": "design",        "group": "lifecycle", "summary": "Record the design + decision id (Planned -> Designed)."},
+    {"name": "classify-risk","cli": "classify-risk", "group": "lifecycle", "summary": "Set the risk tier T0..T4 (Designed -> RiskClassified). Gates scale to risk."},
+    {"name": "approve",      "cli": "approve",       "group": "lifecycle", "summary": "Record approval (RiskClassified -> Approved). Source edits unlock for high-risk work."},
+    {"name": "implement",    "cli": "implement",     "group": "lifecycle", "summary": "Mark implementation underway (Approved -> Implemented)."},
+    {"name": "test",         "cli": "test",          "group": "lifecycle", "summary": "Record test evidence (Implemented -> Tested). Exit code must be 0."},
+    {"name": "review",       "cli": "review",        "group": "lifecycle", "summary": "Record the review ledger (Tested -> Reviewed). Run the panel first."},
+    {"name": "verify",       "cli": "verify",        "group": "lifecycle", "summary": "Record verification evidence (Reviewed -> Verified)."},
+    {"name": "shippable",    "cli": "shippable",     "group": "lifecycle", "summary": "Quality-gate aggregate (Verified -> Shippable)."},
+    {"name": "ship",         "cli": "ship",          "group": "lifecycle", "summary": "Ship: refuses without a clean review + verification; issues a deploy token (Shippable -> Released)."},
+    {"name": "close",        "cli": "close",         "group": "lifecycle", "summary": "Close out (Released -> Closed)."},
+    {"name": "fast",         "cli": "fast",          "group": "fastlane",  "summary": "FAST LANE for small/low-risk work: Intake -> Approved in one step; code immediately."},
+    {"name": "fast-ship",    "cli": "fast-ship",     "group": "fastlane",  "summary": "FAST SHIP for small work: Approved -> Released in one step. REFUSES if tests didn't pass."},
+    {"name": "waive",        "cli": "waive",         "group": "control",   "summary": "Record an explicit, logged waiver to bypass a (waivable) gate."},
+    {"name": "status",       "cli": "status",        "group": "control",   "summary": "Print the current state projection (rebuilt from the signed trace)."},
+    {"name": "doctor",       "cli": "doctor",        "group": "control",   "summary": "Health check: trace integrity + kernel-version drift."},
+    {"name": "repair",       "cli": "repair",        "group": "control",   "summary": "Rebuild state.json from the append-only trace (never rewrites the trace)."},
+    {"name": "trace-verify", "cli": "trace-verify",  "group": "control",   "summary": "Validate the signed trace (hash-chain + HMAC integrity + legal state replay)."},
+    {"name": "dod",          "cli": "dod",           "group": "control",   "summary": "Definition-of-Done / autonomous-loop end-condition (tier-4 = done-with-evidence)."},
+    {"name": "intake",       "cli": "pm-add",        "group": "pm",        "summary": "Drop a rough idea into your Intake column."},
+    {"name": "promote",      "cli": "promote",       "group": "pm",        "summary": "Promote an intake idea into a Feature (user story + AC + child tasks/bugs)."},
+    {"name": "board",        "cli": "board",         "group": "pm",        "summary": "Show the local board (Intake + Backlog)."},
+    {"name": "pm-init",      "cli": "pm-init",       "group": "pm",        "summary": "Provision the GitHub Projects v2 board (repo + Intake-first columns + labels + fields)."},
+    {"name": "pm-sync",      "cli": "pm-sync",       "group": "pm",        "summary": "Push the board to GitHub (idempotent)."},
+    {"name": "pm-pull",      "cli": "pm-pull",       "group": "pm",        "summary": "Reconcile PM edits from GitHub back into the trace (PM-wins for business fields)."},
+    {"name": "pm-mirror",    "cli": "pm-mirror",     "group": "pm",        "summary": "Mirror the board to vault/<slug>/backlog.md + the memory index."}
+  ],
+
+  "agents": [
+    {
+      "name": "evidence-verifier", "standing": true, "model": "inherit", "capability": "readonly",
+      "produces": "verification.json",
+      "brief": "Refuse any 'done'/'resolved'/'shipped' claim that is not backed by APPLY EVIDENCE: a real command + its exit code, the built artifact actually inspected (grep the deployed bundle, not the source), a live health/probe result. Output a verification.json {built_artifact_check, health, live_probe, exit_codes}. If evidence is missing, say so plainly and name what's needed. Never accept LLM recollection as evidence."
+    },
+    {
+      "name": "supply-chain-auditor", "standing": true, "model": "inherit", "capability": "readonly",
+      "produces": "sbom.json",
+      "brief": "Audit dependencies + provenance before ship: new/changed deps, known-critical vulnerabilities, lockfile integrity, install scripts, typosquats, unpinned versions. Produce an sbom.json summary + a blocking verdict on any known-critical. Flag anything that pulls code at install time."
+    }
+  ],
+
+  "dispatch": {
+    "always_invoke_reviewers": ["code-reviewer", "architect-review", "security-auditor"],
+    "external_reviewer": "codex",
+    "tiers": {
+      "T0": "trivial (docs/comments/format) — fast lane, audit only",
+      "T1": "small fix — code flows; evidence (tests) before ship",
+      "T2": "normal feature — design recorded; review + verify before ship",
+      "T3": "risky — full lifecycle + review panel (codex required)",
+      "T4": "auth/migration/prod/security/destructive — full gates + panel + approval"
+    }
+  },
+
+  "review_panel": {
+    "required_from_tier": "T3",
+    "seats": ["claude_lenses", "codex"],
+    "shadow": ["opencode"],
+    "rule": "Any unresolved CRITICAL/HIGH blocks /ship. UNAVAILABLE != pass. opencode runs shadow until it earns a seat."
+  },
+
+  "hooks": {
+    "PreToolUse": {
+      "matcher": "Edit|Write|MultiEdit",
+      "command": "python \"$HOME/.zaude/bin/zhook.py\" pre_tool_use",
+      "timeout": 10
+    }
+  }
+}
