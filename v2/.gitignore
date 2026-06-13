@@ -1,8 +1,0 @@
-secrets/
-generated/
-restore-points/
-installed.json
-.src/
-__pycache__/
-*.pyc
-disabled

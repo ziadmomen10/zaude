@@ -4,6 +4,46 @@ All notable changes to Zaude are documented here. This project follows [Keep a C
 
 ---
 
+## [2.0.0] - 2026-06-13
+
+Zaude 2.0 is a new **enforcement engine**. Zaude 1 layered hooks + conventions on top of Claude
+Code; 2.0 reimplements the workflow as a deterministic Python **kernel** that gates the *tools*, so
+process can't be skipped — not just discouraged. Zaude 1 (hooks, commands, templates, docs) is
+unchanged and continues to work alongside it.
+
+### Added
+
+- **Enforcement kernel** (`kernel/`, stdlib-only Python). A workflow state machine
+  (Intake → … → Released → Closed) where slash commands COMMIT transitions and a `PreToolUse` hook
+  gates the tools. Source edits on high-risk work are blocked before design+approval; deploy is
+  blocked until a `/ship` release token exists.
+- **Tamper-evident trace.** `trace.jsonl` is append-only with a SHA-256 hash chain + per-row HMAC
+  (key stored outside the repo). `state.json` is a rebuildable projection; `zaude repair` /
+  `trace-verify` rebuild/validate it. A hand-appended forged transition fails closed.
+- **Risk-tier fast lane.** Light by default — trivial/low-risk work codes freely; only T3/T4
+  (auth/migration/prod/security) gets the full lifecycle. `fast` + `fast-ship` collapse small work
+  to two commands, while keeping the no-broken-ship evidence gate.
+- **GitHub Projects v2 PM layer.** An Intake-first board (Intake → Backlog → … → Released) with a
+  label taxonomy (`type:feature`/`tech-task`/`bug` + priority + risk), comprehensive issue bodies,
+  and bidirectional sync to the trace + vault (`backlog.md`) + memory, with a conflict model
+  (lifecycle = trace-wins, business fields = PM-wins).
+- **Config-driven generator.** One `policy.json` renders the slash commands, capability agents
+  (`evidence-verifier`, `supply-chain-auditor`), and the hook block (`zaude gen`).
+- **Portable installer + updater.** `install-zaude2.sh` / `install-zaude2.ps1` bootstrap the kernel
+  on any machine; `zaude install` wires `z`-prefixed commands + the fail-open hook into `~/.claude`
+  (snapshots first, fully reversible via `zaude uninstall`); `zaude update --source <git|path>`
+  pulls new kernel versions, regenerates, and re-wires — validated + snapshot-rolled-back.
+- **Definition-of-Done.** `zaude dod` gives an autonomous loop a machine-checkable end-condition
+  (Released/Closed + passing tests + verification + empty intake = done-with-evidence).
+- 38 kernel unit tests; codex-reviewed across the kernel, PM layer, generator, installer, and
+  distribution.
+
+### Notes
+
+- Every agent model is now `inherit` (runs on the session model) — no weaker model for builders/reviewers.
+- The hook is fail-open: any project without a `.zaude/` marker is untouched; onboard in shadow mode first.
+- The GitHub PAT lives only in `~/.zaude/secrets/` and is never committed (verified by the packager).
+
 ## [Unreleased]
 
 ### Added

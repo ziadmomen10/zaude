@@ -36,29 +36,41 @@ jobs:
           find templates/claude-config/hooks -name '*.py' -print0 | xargs -0 python -m py_compile
           echo "OK: all hook .py files compile"
 
+      - name: Zaude 2.0 kernel — compile + unit tests
+        shell: bash
+        run: |
+          set -e
+          find bin kernel -name '*.py' -print0 | xargs -0 python -m py_compile
+          echo "OK: bin + kernel compile"
+          VER="$(cat kernel/CURRENT)"
+          ( cd "kernel/versions/$VER" && python -m unittest discover -s tests )
+          echo "OK: kernel $VER unit tests"
+
       - name: Bash syntax check (install scripts + sync hook)
         shell: bash
         run: |
           set -e
-          for f in install/install.sh install/zaude-sync.sh templates/claude-config/hooks/session-end-vault-sync.sh; do
+          for f in install/install.sh install/zaude-sync.sh install-zaude2.sh templates/claude-config/hooks/session-end-vault-sync.sh; do
             bash -n "$f"
             echo "OK: $f"
           done
 
-      - name: PowerShell parser check (install.ps1)
+      - name: PowerShell parser check (install scripts)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $errors = $null
-          [System.Management.Automation.PSParser]::Tokenize(
-            (Get-Content -Raw install/install.ps1), [ref]$errors
-          ) | Out-Null
-          if ($errors.Count -gt 0) {
-            Write-Error "install.ps1 has parse errors:"
-            $errors | ForEach-Object { Write-Error $_.Message }
-            exit 1
+          foreach ($f in @('install/install.ps1','install-zaude2.ps1')) {
+            $errors = $null
+            [System.Management.Automation.PSParser]::Tokenize(
+              (Get-Content -Raw $f), [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              Write-Error "$f has parse errors:"
+              $errors | ForEach-Object { Write-Error $_.Message }
+              exit 1
+            }
+            Write-Output "OK: $f parses cleanly"
           }
-          Write-Output "OK: install.ps1 parses cleanly"
 
       - name: JSON validation (all tracked .json files)
         shell: bash
