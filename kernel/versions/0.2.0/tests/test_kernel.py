@@ -16,6 +16,10 @@ VROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, VROOT)
 from lib import paths, trace, state as st, gates, keys as _keys  # noqa: E402
 
+# repo root (in CI) or ~/.zaude (locally) — so generator/dist tests don't depend on a real ~/.zaude
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(VROOT)))
+_POLICY = os.path.join(_REPO_ROOT, "policy", "policy.json")
+
 
 def write_project(root, mode="enforce", marker=paths.ZAUDE_MARKER, schema=paths.SCHEMA_VERSION,
                   project_root=None):
@@ -243,7 +247,7 @@ class GeneratorTests(TmpCase):
     def test_generate_produces_commands_agents_hook(self):
         from lib import generator
         out = os.path.join(self.tmp, "gen")
-        r = generator.generate(out_dir=out)
+        r = generator.generate(out_dir=out, policy_path=_POLICY)
         self.assertGreaterEqual(r["commands"], 20)
         self.assertGreaterEqual(r["agents"], 2)
         self.assertTrue(os.path.isfile(os.path.join(out, "commands", "ship.md")))
@@ -257,9 +261,9 @@ class GeneratorTests(TmpCase):
     def test_generate_idempotent(self):
         from lib import generator
         out = os.path.join(self.tmp, "gen")
-        generator.generate(out_dir=out)
+        generator.generate(out_dir=out, policy_path=_POLICY)
         a = open(os.path.join(out, "commands", "ship.md"), encoding="utf-8").read()
-        generator.generate(out_dir=out)
+        generator.generate(out_dir=out, policy_path=_POLICY)
         b = open(os.path.join(out, "commands", "ship.md"), encoding="utf-8").read()
         self.assertEqual(a, b)
 
@@ -267,13 +271,24 @@ class GeneratorTests(TmpCase):
         import glob
         from lib import generator
         out = os.path.join(self.tmp, "gen")
-        generator.generate(out_dir=out)
+        generator.generate(out_dir=out, policy_path=_POLICY)
         for f in glob.glob(os.path.join(out, "**", "*"), recursive=True):
             if os.path.isfile(f):
                 self.assertNotIn("ghp_", open(f, encoding="utf-8").read())
 
 
 class DistTests(TmpCase):
+    def setUp(self):
+        super().setUp()
+        from lib import dist
+        self._oz = dist.ZROOT
+        dist.ZROOT = _REPO_ROOT   # package from the repo (CI) / ~/.zaude (local), not a fixed path
+
+    def tearDown(self):
+        from lib import dist
+        dist.ZROOT = self._oz
+        super().tearDown()
+
     def test_package_excludes_secrets_includes_scripts(self):
         import glob
         from lib import dist
