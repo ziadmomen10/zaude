@@ -35,6 +35,8 @@
     {"name": "repair",       "cli": "repair",        "group": "control",   "summary": "Rebuild state.json from the append-only trace (never rewrites the trace)."},
     {"name": "trace-verify", "cli": "trace-verify",  "group": "control",   "summary": "Validate the signed trace (hash-chain + HMAC integrity + legal state replay)."},
     {"name": "dod",          "cli": "dod",           "group": "control",   "summary": "Definition-of-Done / autonomous-loop end-condition (tier-4 = done-with-evidence)."},
+    {"name": "codex",        "cli": "codex",         "group": "control",   "summary": "Show codex review-seat status (availability + token + retry window). Best-effort; never gates."},
+    {"name": "agents",       "cli": "agents",        "group": "control",   "summary": "Report which required capability agents are installed vs MISSING (advisory; install separately)."},
     {"name": "intake",       "cli": "pm-add",        "group": "pm",        "summary": "Drop a rough idea into your Intake column."},
     {"name": "promote",      "cli": "promote",       "group": "pm",        "summary": "Promote an intake idea into a Feature (user story + AC + child tasks/bugs)."},
     {"name": "board",        "cli": "board",         "group": "pm",        "summary": "Show the local board (Intake + Backlog)."},
@@ -59,21 +61,23 @@
 
   "dispatch": {
     "always_invoke_reviewers": ["code-reviewer", "architect-review", "security-auditor"],
+    "required_agents": ["code-reviewer", "architect-review", "security-auditor", "workflow-orchestrator", "backend-developer", "frontend-developer", "design-bridge"],
     "external_reviewer": "codex",
+    "external_reviewer_best_effort": true,
     "tiers": {
       "T0": "trivial (docs/comments/format) — fast lane, audit only",
       "T1": "small fix — code flows; evidence (tests) before ship",
       "T2": "normal feature — design recorded; review + verify before ship",
-      "T3": "risky — full lifecycle + review panel (codex required)",
-      "T4": "auth/migration/prod/security/destructive — full gates + panel + approval"
+      "T3": "risky — full lifecycle + review panel (codex used if available — best-effort, never a gate)",
+      "T4": "auth/migration/prod/security/destructive — full gates + panel + approval (codex used if available)"
     }
   },
 
   "review_panel": {
-    "required_from_tier": "T3",
+    "panel_from_tier": "T3",
     "seats": ["claude_lenses", "codex"],
     "shadow": ["opencode"],
-    "rule": "Any unresolved CRITICAL/HIGH blocks /ship. UNAVAILABLE != pass. opencode runs shadow until it earns a seat."
+    "rule": "Unresolved CRITICAL/HIGH from any AVAILABLE reviewer blocks /ship. Codex is BEST-EFFORT: if it is not installed/logged-in or is out of credit, the cycle continues WITHOUT it (recorded honestly) — codex absence NEVER blocks. An available-but-unrun codex is a non-blocking nudge. opencode runs shadow until it earns a seat."
   },
 
   "hooks": {
