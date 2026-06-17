@@ -771,3 +771,135 @@ class FindingsBatch3Tests(TmpCase):
                       "https://x-access-token:SECRETTOKEN123@github.com/o/r.git")
         self.assertEqual(r.returncode, 0)
         self.assertNotIn("SECRETTOKEN123", r.stdout + r.stderr)
+
+
+class PersonaTests(TmpCase):
+    """Operator-learning persona — the 'manage' policy is the critical part: tiered promotion
+    (confirmed only after reinforcement), recency decay, drift detection, privacy."""
+    def _cli(self, *a):
+        return subprocess.run([sys.executable, os.path.join(VROOT, "cli.py"), "--path", self.tmp]
+                              + list(a), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def _zd(self):
+        zd = os.path.join(self.tmp, ".zaude"); os.makedirs(zd, exist_ok=True); return zd
+
+    def test_belief_confirmed_only_after_reinforcement(self):
+        import lib.persona as p
+        zd = self._zd()
+        p.promote(zd, "preference", "prefers quality over speed", source="op")
+        # tentative (x1) -> NOT in the brief yet
+        self.assertEqual(p.brief(zd), "")
+        p.promote(zd, "preference", "prefers quality over speed always", source="op")  # near-match -> reinforce
+        self.assertIn("quality", p.brief(zd))                         # confirmed (x2) -> in the brief
+
+    def test_promote_reinforces_near_match_not_duplicate(self):
+        import lib.persona as p
+        zd = self._zd()
+        p.promote(zd, "rule", "never overwrite user data")
+        p.promote(zd, "rule", "never overwrite the user data")        # near-match
+        bs = p.beliefs(zd)
+        self.assertEqual(len(bs), 1)                                  # one belief, reinforced
+        self.assertEqual(bs[0]["reinforcement"], 2)
+
+    def test_recency_decay(self):
+        import lib.persona as p
+        zd = self._zd()
+        p.promote(zd, "rule", "run codex in the review chain", now=1000.0)
+        p.promote(zd, "rule", "run codex in the review chain", now=1000.0)   # confirmed
+        fresh = p.beliefs(zd, now=1000.0)[0]["confidence"]
+        stale = p.beliefs(zd, now=1000.0 + 200 * 86400)[0]["confidence"]      # 200 days later
+        self.assertGreater(fresh, stale)
+        self.assertGreater(stale, 0)               # decays but never vanishes (floored recency)
+
+    def test_drift_flagged(self):
+        import lib.persona as p
+        zd = self._zd()
+        p.promote(zd, "risk_posture", "always run the full review panel")
+        p.promote(zd, "risk_posture", "always run the full review panel")    # confirm it
+        res = p.promote(zd, "risk_posture", "always skip the review panel")  # overlap but contradicts
+        self.assertTrue(res.get("drift"))
+        self.assertTrue(res.get("conflicts"))
+
+    def test_forget(self):
+        import lib.persona as p
+        zd = self._zd()
+        b = p.promote(zd, "preference", "likes scannable bullet points")
+        self.assertTrue(p.forget(zd, b["id"]))
+        self.assertEqual(p.beliefs(zd), [])
+
+    def test_never_raises_on_garbage(self):
+        import lib.persona as p
+        zd = self._zd()
+        for t in (None, "", "🙂", "x" * 5000):
+            p.observe(zd, "weird-kind", t)
+            self.assertIn("id", p.promote(zd, "not-a-category", t or "x") if (t or "x") else {"id": 1})
+        self.assertIsInstance(p.brief(zd), str)
+
+    def test_persona_command_exits_0(self):
+        self._cli("init", "--text", "x", "--mode", "enforce")
+        self.assertEqual(self._cli("persona").returncode, 0)
+        self.assertEqual(self._cli("persona", "--promote", "quality over speed",
+                                   "--category", "preference").returncode, 0)
+        r = self._cli("persona", "--json")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("beliefs", json.loads(r.stdout))
+
+    def test_corrupted_profile_never_raises(self):
+        import lib.persona as p
+        zd=self._zd(); os.makedirs(os.path.join(zd,"persona"),exist_ok=True)
+        # valid JSON, schema-drifted (non-dict belief, bad field types)
+        open(os.path.join(zd,"persona","profile.json"),"w",encoding="utf-8").write(
+            '{"schema":1,"beliefs":["junk",{"reinforcement":"x","last_seen":"bad","statement":"ok rule"}]}')
+        self.assertIsInstance(p.brief(zd),str)          # must not raise
+        self.assertIsInstance(p.beliefs(zd),list)
+        self.assertIn("id",p.promote(zd,"rule","another rule"))
+
+    def test_secret_is_redacted_before_persist(self):
+        import lib.persona as p
+        zd=self._zd()
+        tok="ghp_"+"A"*36          # built at runtime so no literal token sits in this source file
+        p.promote(zd,"rule","token is "+tok)
+        blob=open(os.path.join(zd,"persona","profile.json"),encoding="utf-8").read()
+        self.assertNotIn(tok,blob); self.assertIn("redacted",blob)
+
+    def test_belief_id_not_reused_after_forget(self):
+        import lib.persona as p
+        zd=self._zd()
+        b1=p.promote(zd,"preference","first one"); b2=p.promote(zd,"preference","second one two")
+        p.forget(zd,b2["id"])
+        b3=p.promote(zd,"preference","third one three four")
+        self.assertNotEqual(b3["id"],b1["id"]); self.assertNotEqual(b3["id"],b2["id"])
+
+    def test_short_restatement_reinforces(self):
+        import lib.persona as p
+        zd=self._zd()
+        p.promote(zd,"rule","use pytest")
+        p.promote(zd,"rule","always use pytest")     # stopword 'always' stripped -> same belief
+        self.assertEqual(len(p.beliefs(zd)),1)
+
+    def test_nonlist_beliefs_and_huge_profile_never_crash_and_bounded(self):
+        import lib.persona as p, json as _j
+        zd=self._zd(); os.makedirs(os.path.join(zd,"persona"),exist_ok=True)
+        pf=os.path.join(zd,"persona","profile.json")
+        # 1) non-list 'beliefs' (valid JSON) must not crash
+        open(pf,"w",encoding="utf-8").write('{"schema":1,"beliefs":1}')
+        self.assertIsInstance(p.brief(zd),str); self.assertEqual(p.beliefs(zd),[])
+        # 2) a huge profile is bounded on READ (not just on promote)
+        big={"schema":1,"beliefs":[{"id":"B%d"%i,"category":"preference",
+             "statement":"pref number %d here"%i,"reinforcement":5,
+             "first_seen":1000.0,"last_seen":2.0e9} for i in range(5000)]}
+        open(pf,"w",encoding="utf-8").write(_j.dumps(big))
+        self.assertLessEqual(len(p.beliefs(zd)), p.MAX_PER_CATEGORY)
+
+    def test_corrupt_belief_id_is_not_leaked(self):
+        import lib.persona as pp
+        zd=self._zd(); os.makedirs(os.path.join(zd,"persona"),exist_ok=True)
+        secret_id="sk-"+"Z"*30
+        open(os.path.join(zd,"persona","profile.json"),"w",encoding="utf-8").write(
+            '{"schema":1,"beliefs":[{"id":"%s","category":"rule","statement":"use pytest","reinforcement":3}]}'%secret_id)
+        bs=pp.beliefs(zd)
+        self.assertTrue(bs)
+        self.assertNotEqual(bs[0]["id"],secret_id)            # arbitrary id replaced with B<n>
+        import re as _re
+        self.assertRegex(bs[0]["id"], r"^B\d+$")
+

@@ -35,6 +35,7 @@
     {"name": "repair",       "cli": "repair",        "group": "control",   "summary": "Rebuild state.json from the append-only trace (never rewrites the trace)."},
     {"name": "trace-verify", "cli": "trace-verify",  "group": "control",   "summary": "Validate the signed trace (hash-chain + HMAC integrity + legal state replay)."},
     {"name": "dod",          "cli": "dod",           "group": "control",   "summary": "Definition-of-Done / autonomous-loop end-condition (tier-4 = done-with-evidence)."},
+    {"name": "persona",      "cli": "persona",       "group": "control",   "summary": "Operator-learning persona — the distilled 'decide as the operator would' profile loaded first in autonomous mode."},
     {"name": "codex",        "cli": "codex",         "group": "control",   "summary": "Show codex review-seat status (availability + token + retry window). Best-effort; never gates."},
     {"name": "agents",       "cli": "agents",        "group": "control",   "summary": "Report which required capability agents are installed vs MISSING (advisory; install separately)."},
     {"name": "next",         "cli": "next",          "group": "control",   "summary": "Print the next lifecycle command for the current state (autonomous-loop helper; stops at DoD)."},
