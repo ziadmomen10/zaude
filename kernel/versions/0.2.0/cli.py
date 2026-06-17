@@ -432,8 +432,28 @@ def cmd_pm_move(args):
     return 0
 
 
+# Board-affecting trace kinds (lifecycle status + intake/promote/workitem/move). Used to detect a
+# board that has drifted from GitHub since the last /pm-sync (finding #3.1). [L13]
+_PM_BOARD_KINDS = ("transition", "pm_intake", "pm_promote", "pm_workitem", "pm_move")
+
+
+def _pm_unsynced(rows):
+    """Count board-affecting trace rows appended AFTER the last `pm_synced` row — i.e. unsynced
+    changes the GitHub board has not yet seen. 0 = board is in sync (or nothing to sync)."""
+    last = -1
+    for i, r in enumerate(rows):
+        if r.get("kind") == "pm_synced":
+            last = i
+    return sum(1 for r in rows[last + 1:] if r.get("kind") in _PM_BOARD_KINDS)
+
+
 def cmd_board(args):
     zd, root = _resolve(args)
+    rows = trace.read_trace(zd, root, verify=True)
+    n_stale = _pm_unsynced(rows)
+    if n_stale:
+        print("! board is STALE — %d change(s) since the last /pm-sync. Run /pm-sync to push them "
+              "to GitHub.\n" % n_stale)
     b = _board(zd, root)
     print("INTAKE  (Ziad's column — drop ideas here):")
     print("  (empty)" if not b["intake"] else "", end="")
@@ -912,6 +932,38 @@ def cmd_uninstall(args):
     return 0
 
 
+# Next legal lifecycle command for each state — lets a driver loop autonomously (run /next, do it,
+# repeat) to DoD without hardcoding the sequence (finding #1). [L13/autonomous]
+_NEXT_COMMAND = {
+    "Intake": "/clarify", "Clarified": "/prioritize", "Prioritized": "/plan", "Planned": "/design",
+    "Designed": "/classify-risk", "RiskClassified": "/approve", "Approved": "/implement",
+    "Implemented": "/test", "Tested": "/review", "Reviewed": "/verify", "Verified": "/shippable",
+    "Shippable": "/ship", "Released": "/close", "Closed": None,
+}
+
+
+def cmd_next(args):
+    """Autonomous helper (finding #1): print the next lifecycle command for the current state, or
+    DoD when done — so a driver can loop until DoD without a hardcoded sequence. Read-only; exit 0.
+    (Low/medium-risk work may instead collapse the chain via /fast + /fast-ship.)"""
+    zd, root = _resolve(args)
+    proj = _projection_out(zd, root)
+    cur = proj["current_state"]
+    done = cur in ("Released", "Closed")
+    nxt = _NEXT_COMMAND.get(cur)
+    out = {"current_state": cur, "next_command": nxt, "dod_reached": done,
+           "risk_tier": proj.get("risk_tier")}
+    if getattr(args, "as_json", False):
+        print(json.dumps(out))
+        return 0
+    if done:
+        print("DoD path: state=%s — run /dod to confirm done-with-evidence%s."
+              % (cur, "" if cur == "Closed" else ", then /close"))
+    else:
+        print("next: %s   (state=%s, risk=%s)" % (nxt, cur, proj.get("risk_tier") or "unclassified"))
+    return 0
+
+
 def cmd_status(args):
     zd, root = _resolve(args)
     print(json.dumps(_projection_out(zd, root), indent=2))
@@ -961,6 +1013,13 @@ def cmd_doctor(args):
               % (len(ag["present"]), len(ag["required"]), ", ".join(ag["missing"])))
     else:
         print("DOCTOR: agents %d/%d required present." % (len(ag["present"]), len(ag["required"])))
+    # PM board staleness — ADVISORY only (offline-safe; pushing is the operator's /pm-sync). #3.1
+    try:
+        n_stale = _pm_unsynced(trace.read_trace(zd, root, verify=True))
+        if n_stale:
+            print("DOCTOR: PM board STALE — %d change(s) since last /pm-sync (run /pm-sync)." % n_stale)
+    except Exception:
+        pass
     if issues:
         print("DOCTOR: %d issue(s):" % len(issues))
         for i in issues:
@@ -1131,6 +1190,9 @@ def main(argv=None):
     sub.add_parser("pm-pull").set_defaults(fn=cmd_pm_pull)
 
     sub.add_parser("dod").set_defaults(fn=cmd_dod)
+
+    sp = sub.add_parser("next"); sp.add_argument("--json", dest="as_json", action="store_true")
+    sp.set_defaults(fn=cmd_next)
 
     sp = sub.add_parser("codex"); sp.add_argument("--probe", action="store_true")
     sp.add_argument("--json", dest="as_json", action="store_true"); sp.set_defaults(fn=cmd_codex)

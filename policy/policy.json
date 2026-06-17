@@ -37,6 +37,7 @@
     {"name": "dod",          "cli": "dod",           "group": "control",   "summary": "Definition-of-Done / autonomous-loop end-condition (tier-4 = done-with-evidence)."},
     {"name": "codex",        "cli": "codex",         "group": "control",   "summary": "Show codex review-seat status (availability + token + retry window). Best-effort; never gates."},
     {"name": "agents",       "cli": "agents",        "group": "control",   "summary": "Report which required capability agents are installed vs MISSING (advisory; install separately)."},
+    {"name": "next",         "cli": "next",          "group": "control",   "summary": "Print the next lifecycle command for the current state (autonomous-loop helper; stops at DoD)."},
     {"name": "intake",       "cli": "pm-add",        "group": "pm",        "summary": "Drop a rough idea into your Intake column."},
     {"name": "promote",      "cli": "promote",       "group": "pm",        "summary": "Promote an intake idea into a Feature (user story + AC + child tasks/bugs)."},
     {"name": "board",        "cli": "board",         "group": "pm",        "summary": "Show the local board (Intake + Backlog)."},
@@ -56,6 +57,11 @@
       "name": "supply-chain-auditor", "standing": true, "model": "inherit", "capability": "readonly",
       "produces": "sbom.json",
       "brief": "Audit dependencies + provenance before ship: new/changed deps, known-critical vulnerabilities, lockfile integrity, install scripts, typosquats, unpinned versions. Produce an sbom.json summary + a blocking verdict on any known-critical. Flag anything that pulls code at install time."
+    },
+    {
+      "name": "ui-design-implementer", "standing": false, "model": "inherit", "capability": "edit",
+      "produces": "ui-notes.md",
+      "brief": "Frontend design/UX is a first-class deliverable, not an afterthought (finding #7). When a feature touches UI: (1) if a screenshot or design reference is provided, reproduce it faithfully — spacing, hierarchy, color, states; codex is strong at reading screenshots and turning them into concrete component/CSS specs, so pair codex (read the design) + claude (implement) here; (2) otherwise apply sane defaults — accessible contrast, loading/empty/error states, responsive layout, focus management, no dead/hardcoded data. Output ui-notes.md: the design rules applied, the components built, and any screenshot/design inputs used. Never ship a placeholder UI."
     }
   ],
 
