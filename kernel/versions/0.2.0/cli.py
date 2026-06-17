@@ -11,7 +11,8 @@ import argparse
 import subprocess
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from lib import paths, trace, state as st, pm, onboard, gates, codex, agents, persona  # noqa: E402
+from lib import (paths, trace, state as st, pm, onboard, gates, codex, agents,  # noqa: E402
+                 persona, router)
 
 
 def _kernel_version():
@@ -1161,6 +1162,36 @@ def cmd_persona(args):
     return 0
 
 
+def cmd_route(args):
+    """INTENT DETECTION — given a natural-language request, return the best-matching Zaude command
+    + a safety mode (auto/propose/confirm/ambiguous). Read-only: it SUGGESTS; the routed command
+    records its own transition when actually run. The driver reads `mode` to decide whether to
+    auto-run (safe), confirm (destructive), or show options (ambiguous). Always exits 0."""
+    zd, root = _resolve(args)
+    try:
+        cur = _projection_out(zd, root).get("current_state")
+    except Exception:
+        cur = None
+    res = router.route(args.text, cur)
+    if getattr(args, "as_json", False):
+        print(json.dumps(res))
+        return 0
+    if not res.get("command"):
+        print("route: no clear command — try /status or /next, or rephrase.")
+        return 0
+    print("route: /%s  (mode=%s, confidence=%.2f)" % (res["command"], res["mode"], res["confidence"]))
+    if res.get("blocked_by"):
+        print("  blocked: " + "; ".join(res["blocked_by"]))
+    if res.get("alternates"):
+        print("  alternates: " + ", ".join("/%s(%.2f)" % (a["command"], a["confidence"])
+                                           for a in res["alternates"]))
+    if res["mode"] == "confirm":
+        print("  ! destructive — confirm before running.")
+    elif res["mode"] == "ambiguous":
+        print("  ambiguous — pick an alternate or rephrase.")
+    return 0
+
+
 def cmd_status(args):
     zd, root = _resolve(args)
     print(json.dumps(_projection_out(zd, root), indent=2))
@@ -1406,6 +1437,9 @@ def main(argv=None):
     sp = sub.add_parser("runner"); sp.add_argument("--mode", choices=("github", "self-hosted"),
                                                    default="github")
     sp.add_argument("--repo-url", dest="repo_url", default=None); sp.set_defaults(fn=cmd_runner)
+
+    sp = sub.add_parser("route"); sp.add_argument("text")
+    sp.add_argument("--json", dest="as_json", action="store_true"); sp.set_defaults(fn=cmd_route)
 
     sp = sub.add_parser("codex"); sp.add_argument("--probe", action="store_true")
     sp.add_argument("--json", dest="as_json", action="store_true"); sp.set_defaults(fn=cmd_codex)
