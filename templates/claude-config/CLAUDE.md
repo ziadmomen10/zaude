@@ -111,6 +111,19 @@ Always, even without permission prompts:
 
 ---
 
+## Persona — deciding autonomously *as the operator would*
+
+When you work autonomously (the operator said "autonomous", "decide for me", "don't ask"), **load the operator persona FIRST**: `zaude persona` returns the distilled, confirmed profile of how the operator decides — their preferences, rules, and risk posture, learned from recorded decisions. Decide the way that profile says they would, not a generic default.
+
+The persona is *learned, managed* memory (not a static list):
+- As you notice the operator **correct, rephrase, accept, or reject** something, record the signal: `zaude persona --observe "<what you learned>" --kind correction|acceptance|rejection|stated_rule`.
+- When a preference is clearly real (stated, or repeated), promote it: `zaude persona --promote "<belief>" --category preference|rule|risk_posture`. A belief becomes **confirmed** only after it's reinforced — repetition is the signal it's real, which keeps noise out of the persona.
+- If a new preference contradicts a confirmed one, the kernel flags **drift** — surface it, don't silently overwrite (preferences evolve).
+
+The persona is operator-private (gitignored, never pushed). It is advisory — it informs autonomous judgment; it never overrides an explicit instruction or a safety gate.
+
+---
+
 ## Memory and session continuity
 
 - **Session start:** The `SessionStart` hook auto-loads vault context (CLAUDE.md, current-state.md, decisions.md, open-questions.md, spec.md, architecture.md, recent session logs, patterns, memory). `/start` reads what's in context; it does NOT re-read from disk.

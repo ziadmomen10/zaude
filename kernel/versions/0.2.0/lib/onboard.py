@@ -45,7 +45,8 @@ def git_init(root):
         gi = os.path.join(root, ".gitignore")
         if not os.path.exists(gi):
             with open(gi, "w", encoding="utf-8") as f:
-                f.write(".zaude/.lock\n.zaude/*.tmp.*\n.zaude/codex.json\n__pycache__/\n")
+                f.write(".zaude/.lock\n.zaude/*.tmp.*\n.zaude/codex.json\n"
+                        ".zaude/persona/\n__pycache__/\n")
         return True
     except Exception:
         return False

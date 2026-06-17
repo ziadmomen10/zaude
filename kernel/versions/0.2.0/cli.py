@@ -11,7 +11,8 @@ import argparse
 import subprocess
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from lib import paths, trace, state as st, pm, onboard, gates, codex, agents, router  # noqa: E402
+from lib import (paths, trace, state as st, pm, onboard, gates, codex, agents,  # noqa: E402
+                 persona, router)
 
 
 def _kernel_version():
@@ -1128,6 +1129,39 @@ def cmd_runner(args):
     return 0
 
 
+def cmd_persona(args):
+    """OPERATOR-LEARNING persona — the distilled 'decide as the operator would' profile that
+    autonomous mode loads FIRST. Read by default; light-write via --observe/--promote/--forget.
+    Always exits 0 (advisory; never gates). [operator-learning layer]"""
+    zd, root = _resolve(args)
+    if getattr(args, "observe", None):
+        s = persona.observe(zd, getattr(args, "kind", "preference") or "preference",
+                            args.observe, source="operator")
+        print("persona: signal recorded (%s)" % s["kind"])
+        return 0
+    if getattr(args, "promote", None):
+        b = persona.promote(zd, getattr(args, "category", "preference") or "preference",
+                            args.promote, source="operator")
+        reinf = int(b.get("reinforcement", 1))
+        if b.get("drift"):
+            print("persona: ! possible preference drift — conflicts with: %s"
+                  % "; ".join(b.get("conflicts", [])))
+        print("persona: belief %s — %s (x%d)"
+              % (b.get("id"), "CONFIRMED" if reinf >= persona.PROMOTE_MIN else "tentative", reinf))
+        return 0
+    if getattr(args, "forget", None):
+        ok = persona.forget(zd, args.forget)
+        print("persona: %s %s" % ("forgot" if ok else "no such belief", args.forget))
+        return 0
+    if getattr(args, "as_json", False):
+        print(json.dumps({"brief": persona.brief(zd), "beliefs": persona.beliefs(zd)}))
+        return 0
+    b = persona.brief(zd)
+    print(b if b else "persona: still learning — no confirmed beliefs yet. Record one with "
+          "`zaude persona --promote \"...\" --category preference|rule|risk_posture`.")
+    return 0
+
+
 def cmd_route(args):
     """INTENT DETECTION — given a natural-language request, return the best-matching Zaude command
     + a safety mode (auto/propose/confirm/ambiguous). Read-only: it SUGGESTS; the routed command
@@ -1384,6 +1418,15 @@ def main(argv=None):
     sub.add_parser("pm-pull").set_defaults(fn=cmd_pm_pull)
 
     sub.add_parser("dod").set_defaults(fn=cmd_dod)
+
+    sp = sub.add_parser("persona")
+    sp.add_argument("--observe", default=None)
+    sp.add_argument("--kind", default="preference")
+    sp.add_argument("--promote", default=None)
+    sp.add_argument("--category", default="preference")
+    sp.add_argument("--forget", default=None)
+    sp.add_argument("--json", dest="as_json", action="store_true")
+    sp.set_defaults(fn=cmd_persona)
 
     sp = sub.add_parser("next"); sp.add_argument("--json", dest="as_json", action="store_true")
     sp.set_defaults(fn=cmd_next)
