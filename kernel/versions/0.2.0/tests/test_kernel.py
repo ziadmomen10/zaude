@@ -684,3 +684,90 @@ class FindingsBatch2Tests(TmpCase):
         with open(_POLICY, encoding="utf-8") as f:
             pol = json.load(f)
         self.assertIn("ui-design-implementer", [a["name"] for a in pol["agents"]])
+
+
+class FindingsBatch3Tests(TmpCase):
+    """Findings #2 (vault-push), #6 (runner emit), #3.3 (native sub-issues) — all offline-tested."""
+    def _cli(self, *a):
+        return subprocess.run([sys.executable, os.path.join(VROOT, "cli.py"), "--path", self.tmp]
+                              + list(a), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    # ---- #2 vault-push (offline: push to a local bare repo, no network/token) ----
+    def test_vault_push_to_local_bare_remote(self):
+        bare = os.path.join(self.tmp, "vault-remote.git")
+        subprocess.run(["git", "init", "--bare", "-q", bare], check=True)
+        self._cli("onboard", "--slug", "proj", "--text", "x")          # creates root/vault/proj/
+        r = self._cli("vault-push", "--remote", bare)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ls = subprocess.run(["git", "ls-remote", "--heads", bare], capture_output=True, text=True)
+        self.assertIn("refs/heads/main", ls.stdout)                    # vault content landed
+        # parent .gitignore now ignores the nested vault repo
+        self.assertIn("vault/", open(os.path.join(self.tmp, ".gitignore"), encoding="utf-8").read())
+
+    def test_vault_push_no_remote_is_advisory(self):
+        self._cli("onboard", "--slug", "proj", "--text", "x")
+        r = self._cli("vault-push")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("no remote configured", r.stdout)
+
+    # ---- #6 runner emit ----
+    def test_runner_github_emits_hosted_workflow(self):
+        self._cli("onboard", "--slug", "p", "--text", "x")
+        r = self._cli("runner", "--mode", "github")
+        self.assertEqual(r.returncode, 0)
+        wf = open(os.path.join(self.tmp, ".github", "workflows", "zaude-ci.yml"), encoding="utf-8").read()
+        self.assertIn("ubuntu-latest", wf)
+        self.assertIn("permissions:", wf)
+
+    def test_runner_self_hosted_emits_setup_script(self):
+        self._cli("onboard", "--slug", "p", "--text", "x")
+        r = self._cli("runner", "--mode", "self-hosted", "--repo-url", "https://github.com/o/r")
+        self.assertEqual(r.returncode, 0)
+        wf = open(os.path.join(self.tmp, ".github", "workflows", "zaude-ci.yml"), encoding="utf-8").read()
+        self.assertIn("self-hosted", wf)
+        body = open(os.path.join(self.tmp, ".github", "runner-setup.sh"), encoding="utf-8").read()
+        self.assertIn("GITHUB_RUNNER_TOKEN", body)        # env-var token, not a stored secret
+        self.assertNotIn("2.319.1", body)                 # not a stale pinned version
+        self.assertIn("releases/latest", body)            # discovers latest at runtime
+
+    # ---- #3.3 native sub-issues (mock rest; offline) ----
+    def test_link_subissues_posts_child_to_parent(self):
+        import lib.pm_github as pg
+        calls = []
+        def fake(method, path, payload=None):
+            calls.append((method, path, payload))
+            return (200, []) if method == "GET" else (201, {})
+        orig = pg.rest; pg.rest = fake
+        try:
+            board = {"items": {"W1": {"type": "feature"},
+                               "W1-1": {"type": "tech-task", "parent": "W1"}}}
+            mapping = {"W1": {"number": 10, "id": 1000}, "W1-1": {"number": 11, "id": 1001}}
+            linked = pg.link_subissues("o", "r", board, mapping)
+        finally:
+            pg.rest = orig
+        self.assertEqual(linked, 1)
+        post = [c for c in calls if c[0] == "POST"][0]
+        self.assertIn("/issues/10/sub_issues", post[1])    # POST to the PARENT number
+        self.assertEqual(post[2], {"sub_issue_id": 1001})  # child REST id, not number
+
+    def test_link_subissues_idempotent_and_never_raises(self):
+        import lib.pm_github as pg
+        def fake(method, path, payload=None):
+            if method == "GET":
+                return 200, [{"id": 1001}]                 # already linked
+            raise RuntimeError("should not POST when already linked")
+        orig = pg.rest; pg.rest = fake
+        try:
+            board = {"items": {"W1": {"type": "feature"}, "W1-1": {"type": "bug", "parent": "W1"}}}
+            mapping = {"W1": {"number": 10, "id": 1000}, "W1-1": {"number": 11, "id": 1001}}
+            self.assertEqual(pg.link_subissues("o", "r", board, mapping), 0)   # skipped
+        finally:
+            pg.rest = orig
+
+    def test_vault_push_never_logs_credentialed_remote(self):
+        # codex-HIGH regression: a token-bearing remote URL must NEVER appear in stdout/stderr
+        self._cli("onboard", "--slug", "p", "--text", "x")
+        r = self._cli("vault-push", "--remote",
+                      "https://x-access-token:SECRETTOKEN123@github.com/o/r.git")
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("SECRETTOKEN123", r.stdout + r.stderr)

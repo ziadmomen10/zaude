@@ -271,8 +271,9 @@ def sync(cfg, board, mapping, persist=None):
                 mapping.pop(key, None); _persist(); existing = None
             elif s != 200:
                 raise GitHubError("validate issue #%s failed (http %s)" % (existing["number"], s))
-            else:  # refresh node_id from the live issue (also heals pre-existing maps w/o 'node')
+            else:  # refresh node_id + REST id from the live issue (heals pre-existing maps)
                 existing["node"] = gi.get("node_id") or existing.get("node")
+                existing["id"] = gi.get("id") or existing.get("id")   # REST db id for sub-issues
         if existing:
             node, number = existing["node"], existing["number"]
             s, _ = rest("PATCH", "/repos/%s/%s/issues/%s" % (login, repo, number),
@@ -286,8 +287,10 @@ def sync(cfg, board, mapping, persist=None):
             if s != 201 or "node_id" not in iss:
                 raise GitHubError("create issue '%s' failed (http %s)" % (title[:40], s))
             node, number = iss["node_id"], iss["number"]
-            # record identity IMMEDIATELY (before add) so a crash never duplicates the issue
-            mapping[key] = {"number": number, "node": node, "url": iss["html_url"], "work_id": key}
+            # record identity IMMEDIATELY (before add) so a crash never duplicates the issue.
+            # `id` is the REST db id (NOT the number) used to link native sub-issues [#3.3].
+            mapping[key] = {"number": number, "node": node, "url": iss["html_url"],
+                            "work_id": key, "id": iss.get("id")}
             _persist()
             if close:
                 cs, _ = rest("PATCH", "/repos/%s/%s/issues/%s" % (login, repo, number), {"state": "closed"})
@@ -341,7 +344,43 @@ def sync(cfg, board, mapping, persist=None):
                 upsert(wid, i2["title"], _task_body(i2), labels, cstat, pairs)
         n += 1
     _persist()
+    # #3.3 — link children to parents as NATIVE GitHub sub-issues (best-effort; never breaks sync).
+    try:
+        link_subissues(login, repo, board, mapping)
+    except Exception:
+        pass
     return mapping, n
+
+
+def link_subissues(login, repo, board, mapping):
+    """#3.3 — link each child task/bug to its parent feature as a NATIVE GitHub sub-issue, on top
+    of the existing body-text 'Parent:' reference. BEST-EFFORT: every failure (missing id, 4xx,
+    rate-limit, network) is swallowed and the next child is tried — it NEVER raises into sync().
+    Idempotent: preflight-lists the parent's sub-issues and skips ones already linked. Uses the
+    REST db `id` (NOT the issue number) as `sub_issue_id`, per the GitHub sub-issues API."""
+    linked = 0
+    for wid, i in board.get("items", {}).items():
+        parent_wid = i.get("parent")
+        if not parent_wid:
+            continue
+        child_id = (mapping.get(wid) or {}).get("id")
+        parent_num = (mapping.get(parent_wid) or {}).get("number")
+        if not child_id or not parent_num:
+            continue
+        try:
+            s, lst = rest("GET", "/repos/%s/%s/issues/%s/sub_issues" % (login, repo, parent_num))
+            if s == 200 and isinstance(lst, list) and any(
+                    (x or {}).get("id") == child_id for x in lst):
+                continue                                  # already linked -> idempotent skip
+            s2, _ = rest("POST", "/repos/%s/%s/issues/%s/sub_issues" % (login, repo, parent_num),
+                         {"sub_issue_id": child_id})
+            if s2 in (200, 201):
+                linked += 1
+            # any other status (422 already-linked, 403/404/410, rate-limit) -> leave the
+            # body-text 'Parent:' link as the fallback; do not raise.
+        except Exception:
+            continue
+    return linked
 
 
 # ---------------- pull (GitHub -> trace reconcile) ----------------
