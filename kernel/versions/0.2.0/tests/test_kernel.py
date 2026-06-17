@@ -651,3 +651,36 @@ class AgentPresenceTests(TmpCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class FindingsBatch2Tests(TmpCase):
+    """Findings #1 (autonomous /next), #3.1 (PM staleness signal), #7 (design agent)."""
+    def _cli(self, *a):
+        return subprocess.run([sys.executable, os.path.join(VROOT, "cli.py"), "--path", self.tmp]
+                              + list(a), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def test_next_points_to_clarify_at_intake(self):
+        self._cli("init", "--text", "x", "--mode", "enforce")
+        r = self._cli("next", "--json")
+        self.assertEqual(r.returncode, 0)
+        d = json.loads(r.stdout)
+        self.assertEqual(d["next_command"], "/clarify")
+        self.assertFalse(d["dod_reached"])
+
+    def test_next_map_endpoints(self):
+        import cli
+        self.assertIsNone(cli._NEXT_COMMAND["Closed"])
+        self.assertEqual(cli._NEXT_COMMAND["Tested"], "/review")
+
+    def test_pm_unsynced_counts_board_rows_after_last_sync(self):
+        import cli
+        rows = [{"kind": "pm_intake"}, {"kind": "pm_synced"},
+                {"kind": "transition", "from": "a", "to": "b"}, {"kind": "pm_promote"}]
+        self.assertEqual(cli._pm_unsynced(rows), 2)
+        self.assertEqual(cli._pm_unsynced(rows + [{"kind": "pm_synced"}]), 0)
+        self.assertEqual(cli._pm_unsynced([{"kind": "waiver"}, {"kind": "pm_synced"}]), 0)
+
+    def test_design_agent_in_policy(self):
+        with open(_POLICY, encoding="utf-8") as f:
+            pol = json.load(f)
+        self.assertIn("ui-design-implementer", [a["name"] for a in pol["agents"]])
