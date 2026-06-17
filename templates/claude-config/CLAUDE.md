@@ -25,6 +25,21 @@ Manual prompting is fallback. If a command covers the workflow, use it.
 
 ---
 
+## Intent routing — say what you want, don't memorize commands
+
+You do NOT have to remember which `/command` fits a situation. **Describe what you want in plain language and route it.** The kernel ships an intent detector: `zaude route "<what the user said>" --json` returns `{command, mode, confidence, blocked_by, alternates}`. Use `mode` to decide how to act:
+
+| `mode` | Meaning | What you do |
+|---|---|---|
+| **auto** | safe / read-only, high confidence (`status`, `next`, `doctor`, `agents`, `dod`, `route`, `board`) | run it immediately |
+| **propose** | a mutating workflow step (`clarify`…`approve`, `review`, `implement`, `pm-sync`, `vault-push`…) | state the plan in one line, then run it |
+| **confirm** | destructive / irreversible-ish (`ship`, `fast-ship`, `close`, `waive`, `repair`, `pm-pull`) | announce loudly + get explicit confirmation first |
+| **ambiguous** | confidence `< 0.55` | show the top alternates and ask, or pick the obviously-right one |
+
+The router is deterministic and offline — it's the safety net under your own judgment, not a replacement for it. A `confirm`/destructive command is **never** auto-run no matter how confident the score. When in doubt, `zaude next` tells you the next legal step from the current lifecycle state.
+
+---
+
 ## Permission mode
 
 If you run Claude Code with `--dangerously-skip-permissions`, you do NOT get prompts before tool calls. The replacement is a **loud announcement** before any destructive action. Format:

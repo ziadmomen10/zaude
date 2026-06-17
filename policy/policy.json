@@ -38,6 +38,7 @@
     {"name": "codex",        "cli": "codex",         "group": "control",   "summary": "Show codex review-seat status (availability + token + retry window). Best-effort; never gates."},
     {"name": "agents",       "cli": "agents",        "group": "control",   "summary": "Report which required capability agents are installed vs MISSING (advisory; install separately)."},
     {"name": "next",         "cli": "next",          "group": "control",   "summary": "Print the next lifecycle command for the current state (autonomous-loop helper; stops at DoD)."},
+    {"name": "route",        "cli": "route",         "group": "control",   "summary": "INTENT DETECTION: map a natural-language request to the right command + a safety mode (auto/propose/confirm)."},
     {"name": "vault-push",   "cli": "vault-push",    "group": "control",   "summary": "Sync the project vault to a shared GitHub repo (own git repo under vault/; best-effort)."},
     {"name": "runner",       "cli": "runner",        "group": "control",   "summary": "Emit CI workflow + (self-hosted) a VPS runner-install script. --mode github|self-hosted."},
     {"name": "intake",       "cli": "pm-add",        "group": "pm",        "summary": "Drop a rough idea into your Intake column."},

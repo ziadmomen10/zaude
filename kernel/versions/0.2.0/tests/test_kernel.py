@@ -771,3 +771,52 @@ class FindingsBatch3Tests(TmpCase):
                       "https://x-access-token:SECRETTOKEN123@github.com/o/r.git")
         self.assertEqual(r.returncode, 0)
         self.assertNotIn("SECRETTOKEN123", r.stdout + r.stderr)
+
+
+class IntentRouterTests(TmpCase):
+    """Intent detection (architecture review headline). The SAFETY MODEL is the critical lock:
+    a destructive command is NEVER 'auto', and ambiguous text never routes confidently."""
+    def _cli(self, *a):
+        return subprocess.run([sys.executable, os.path.join(VROOT, "cli.py"), "--path", self.tmp]
+                              + list(a), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def test_safe_request_routes_auto(self):
+        import lib.router as r
+        res = r.route("where am i in the workflow")
+        self.assertEqual(res["command"], "status")
+        self.assertEqual(res["mode"], "auto")
+
+    def test_ship_is_always_confirm_never_auto(self):
+        import lib.router as r
+        res = r.route("ship it to production now", current_state="Shippable")
+        self.assertEqual(res["command"], "ship")
+        self.assertEqual(res["mode"], "confirm")   # destructive -> confirm regardless of confidence
+        self.assertNotEqual(res["mode"], "auto")
+
+    def test_destructive_without_explicit_verb_is_penalized(self):
+        import lib.router as r
+        # "clean up the work" must NOT confidently route to a destructive command like /close
+        res = r.route("clean up the work a bit")
+        self.assertNotEqual(res.get("command"), "close")
+
+    def test_state_incompatible_command_is_blocked(self):
+        import lib.router as r
+        res = r.route("approve it", current_state="Intake")     # approve needs RiskClassified
+        if res["command"] == "approve":
+            self.assertTrue(res["blocked_by"])
+
+    def test_ambiguous_text_is_ambiguous(self):
+        import lib.router as r
+        res = r.route("hmm ok then")
+        self.assertIn(res["mode"], ("ambiguous",))
+
+    def test_router_never_raises_on_garbage(self):
+        import lib.router as r
+        for t in (None, "", "🙂🙂🙂", "a" * 5000):
+            self.assertIn("mode", r.route(t))
+
+    def test_route_command_exits_0(self):
+        self._cli("init", "--text", "x", "--mode", "enforce")
+        out = self._cli("route", "what should i do next", "--json")
+        self.assertEqual(out.returncode, 0)
+        self.assertIn("command", json.loads(out.stdout))
