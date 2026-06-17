@@ -10,7 +10,7 @@ import time
 import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from lib import paths, trace, state as st, pm, onboard, gates  # noqa: E402
+from lib import paths, trace, state as st, pm, onboard, gates, codex, agents  # noqa: E402
 
 
 def _kernel_version():
@@ -216,10 +216,106 @@ def cmd_fast_ship(args):
     return 0
 
 
+def _seat(outcome, verdict=None, summary=None, reason=None, retry_at=None, now=None, **extra):
+    """A codex review-seat record. `enforced` means ONLY 'codex actually participated' (outcome ==
+    used) — never claimed for absence/skip/no-credit (codex-review-MEDIUM). All keys present so the
+    ledger schema is stable."""
+    s = {"outcome": outcome, "verdict": verdict, "summary": summary, "reason": reason,
+         "retry_at": retry_at, "checked_at": now or time.time(), "enforced": (outcome == "used")}
+    s.update(extra)
+    return s
+
+
+def _codex_review_seat(zd, args, tier):
+    """Build the honest, NON-BLOCKING codex seat for the review ledger. NEVER refuses and NEVER
+    changes the exit code — codex is best-effort. The whole body is guarded so an unexpected raise
+    degrades to a benign 'unavailable' record instead of crashing /review (the "never raises into
+    the cycle" guarantee is total, not emergent). [L13/graceful-codex]"""
+    now = time.time()
+    try:
+        mode = (getattr(args, "codex", "auto") or "auto")
+        verdict = getattr(args, "codex_verdict", None)
+        summary = (getattr(args, "codex_summary", "") or "")[:500]
+        err = getattr(args, "codex_error", None)
+        retry_arg = getattr(args, "codex_retry_at", None)
+
+        # 1. Explicit operator skip wins over everything else (incl. a stray verdict) — honest:
+        #    the operator turned codex off for THIS review. (codex-review-MEDIUM: off must win.)
+        if mode in ("off", "never"):
+            sys.stderr.write("codex: skipped by --codex %s for this review; continuing.\n" % mode)
+            return _seat("skipped", reason=mode, now=now)
+
+        # 2. Below T3 codex isn't part of the panel (light by default).
+        if tier not in gates.HIGH_RISK:
+            return _seat("skipped", reason="low_risk", now=now)
+
+        # 3. Driver ran codex and got a verdict -> honest 'used'. Codex is clearly back -> clear
+        #    any no-credit backoff so it re-participates next time.
+        if verdict:
+            codex.clear_retry(zd)
+            return _seat("used", verdict=verdict, summary=summary, now=now)
+
+        # 4. Driver ran codex but it FAILED (quota / rate-limit / auth) and reported the error ->
+        #    record honestly AND arm the no-credit backoff so codex AUTO-RESUMES when the reset
+        #    window passes (the user's explicit requirement). [codex-review-HIGH wired here]
+        if err:
+            cls = codex.classify_error(1, err, now=now)
+            # explicit --codex-retry-at wins, but a BAD value must not discard a valid hint
+            # parsed from codex's stderr (codex re-review LOW).
+            ra = codex.parse_retry_at(retry_arg) if retry_arg else None
+            if ra is None:
+                ra = cls.get("retry_at")
+            if cls["reason"] in (codex.QUOTA, codex.RATE_LIMIT):
+                codex.note_no_credit(zd, cls["reason"], ra)
+                sys.stderr.write("codex: %s — continuing without it; will auto-resume%s.\n"
+                                 % (cls["reason"], " at the retry window" if ra else
+                                    " on the next review"))
+                return _seat("no_credit", reason=cls["reason"], retry_at=ra, now=now)
+            sys.stderr.write("codex: error (%s) — continuing without it.\n" % cls["reason"])
+            return _seat("unavailable", reason=cls["reason"], now=now)
+
+        # 5. No verdict/err: honor a live no-credit backoff (don't hammer a rate-limited provider;
+        #    due_now() returns True again once the stored retry_at passes -> auto-resume).
+        status = codex.read_status(zd)
+        if not codex.due_now(status, now):
+            r = status.get("retry") or {}
+            sys.stderr.write("codex: in a no-credit/rate-limit backoff — continuing without it "
+                             "(auto-resumes at the retry window).\n")
+            return _seat("no_credit", reason=r.get("reason"), retry_at=r.get("retry_at"), now=now)
+
+        # 6. Probe availability for the honest record + the soft "you have codex, use it" nudge.
+        pr = codex.probe()
+        if pr.get("status") == codex.READY:
+            loud = (mode == "on")
+            msg = ("codex is AVAILABLE and this is %s — run it and pass --codex-verdict "
+                   "pass|concerns|fail (recorded as available-but-not-run).\n" % tier)
+            sys.stderr.write(("NUDGE: " + msg) if loud else ("codex: " + msg))
+            return _seat("skipped", reason="available_not_run", now=now,
+                         version=pr.get("version"), auth_source=pr.get("auth_source"))
+        if pr.get("status") == codex.PRESENT_NOAUTH:
+            sys.stderr.write("codex: installed but not logged in — continuing without it. Run "
+                             "`codex login` or drop a token at ~/.zaude/secrets/codex.\n")
+            return _seat("unavailable", reason="present_noauth", now=now)
+        sys.stderr.write("codex: not installed — continuing without it.\n")
+        return _seat("unavailable", reason="missing", now=now)
+    except Exception as e:   # the cycle must NEVER fail because of codex
+        try:
+            sys.stderr.write("codex: seat error (%s) — continuing without it.\n" % str(e)[:80])
+        except Exception:
+            pass
+        return _seat("unavailable", reason="seat_error", now=now)
+
+
 def cmd_review(args):
+    """Tested -> Reviewed. Records the GRACEFUL codex seat (best-effort; never blocks). The ship
+    gate still reads only `unresolved_critical_high`, so a codex 'fail' the driver wants to honor
+    must be reflected there by the driver — codex never sets the gate by itself."""
     zd, root = _resolve(args)
+    tier = st.reduce(trace.read_trace(zd, root, verify=True))["risk_tier"]
     unresolved = int(args.unresolved)
-    obj = {"findings_summary": args.summary, "unresolved_critical_high": unresolved}
+    seat = _codex_review_seat(zd, args, tier)
+    obj = {"findings_summary": args.summary, "unresolved_critical_high": unresolved,
+           "risk_tier_at_review": tier, "review_seats": {"codex": seat}}
     return _commit(zd, root, "Tested", "Reviewed", "/review", "review-ledger.json", obj)
 
 
@@ -849,12 +945,75 @@ def cmd_doctor(args):
     if _kernel_version() != _project_kernel_version(zd):
         issues.append("kernel_version drift: project=%s current=%s"
                       % (_project_kernel_version(zd), _kernel_version()))
+    # codex is best-effort: mere ABSENCE is advisory (never an issue / never flips the exit code),
+    # but a MISCONFIGURED token (symlink / wrong location) IS a real issue worth flagging.
+    if codex.token_misconfigured():
+        issues.append("codex token ~/.zaude/secrets/codex is unsafe (symlink/wrong location)")
+    cx = codex.probe()
+    print("DOCTOR: codex %s (%s)%s" % (cx["status"], cx.get("detail", ""),
+          "" if cx["status"] == codex.READY else " — reviews continue without it"))
+    # required agents: ADVISORY only (never an issue / never flips the exit code — a fresh machine
+    # legitimately has none, and installing them is the operator's job). Visibility for #4.1.
+    ag = agents.check(root)
+    if ag["missing"]:
+        print("DOCTOR: agents %d/%d required present — MISSING: %s (install as "
+              "~/.claude/agents/<name>.md; commands that invoke them will degrade)"
+              % (len(ag["present"]), len(ag["required"]), ", ".join(ag["missing"])))
+    else:
+        print("DOCTOR: agents %d/%d required present." % (len(ag["present"]), len(ag["required"])))
     if issues:
         print("DOCTOR: %d issue(s):" % len(issues))
         for i in issues:
             print("  - " + i)
         return 1
     print("DOCTOR: ok")
+    return 0
+
+
+def cmd_agents(args):
+    """Read-only required-agent presence report. Always exits 0 — advisory, like /codex (a missing
+    agent is the operator's to install, never a kernel failure). [L7/agent-reliability #4.1]"""
+    zd, root = _resolve(args)
+    ag = agents.check(root)
+    if getattr(args, "as_json", False):
+        print(json.dumps(ag))
+        return 0
+    print("required agents: %d (%d total installed)" % (len(ag["required"]), ag["installed_total"]))
+    print("  present: %s" % (", ".join(ag["present"]) or "(none)"))
+    print("  MISSING: %s" % (", ".join(ag["missing"]) or "(none)"))
+    if ag["missing"]:
+        print("hint: install missing agents as ~/.claude/agents/<name>.md (or "
+              "<project>/.claude/agents/). Zaude generates only its own capability agents; the "
+              "review/build agents are installed separately.")
+    return 0
+
+
+def cmd_codex(args):
+    """Read-only codex status (availability + token + retry window). Always exits 0 — it is the
+    codex analog of /status & /doctor, not a gate. [L13/graceful-codex]"""
+    zd, root = _resolve(args)
+    d = codex.read_status(zd)
+    if getattr(args, "probe", False) or not d.get("last_probe"):
+        pr = codex.probe()
+        d["last_probe"] = pr
+        codex.write_status(zd, d)
+    else:
+        pr = d["last_probe"]
+    retry = d.get("retry") or {}
+    tok = ("configured" if codex.have_token() else
+           ("MISCONFIGURED" if codex.token_misconfigured() else "none"))
+    if getattr(args, "as_json", False):
+        print(json.dumps({"status": pr.get("status"), "version": pr.get("version"),
+                          "auth_source": pr.get("auth_source"), "detail": pr.get("detail"),
+                          "token": tok, "retry": retry}))
+        return 0
+    print("codex: %s (%s)" % (pr.get("status"), pr.get("detail") or ""))
+    print("token: %s" % tok)
+    print("retry: %s" % ("blocked reason=%s retry_at=%s" % (retry.get("reason"), retry.get("retry_at"))
+                         if retry.get("blocked") else "none"))
+    if pr.get("status") != codex.READY:
+        print("hint: run `codex login`, or drop a token at ~/.zaude/secrets/codex (or set "
+              "ZAUDE_CODEX_TOKEN). Codex is best-effort — reviews proceed without it.")
     return 0
 
 
@@ -909,7 +1068,18 @@ def main(argv=None):
                     lambda a: {"cmd": a.cmd, "exit": a.exit}))
 
     sp = sub.add_parser("review"); sp.add_argument("--summary", default="")
-    sp.add_argument("--unresolved", default="0"); sp.set_defaults(fn=cmd_review)
+    sp.add_argument("--unresolved", default="0")
+    sp.add_argument("--codex", choices=("auto", "on", "off", "never"), default="auto")
+    sp.add_argument("--codex-verdict", dest="codex_verdict",
+                    choices=("pass", "concerns", "fail"), default=None)
+    sp.add_argument("--codex-summary", dest="codex_summary", default="")
+    sp.add_argument("--codex-error", dest="codex_error", default=None,
+                    help="codex's error output when it FAILED (quota/rate-limit/auth). Arms the "
+                         "no-credit backoff so codex auto-resumes when the reset window passes.")
+    sp.add_argument("--codex-retry-at", dest="codex_retry_at", default=None,
+                    help="explicit retry time (epoch seconds or ISO-8601) for a codex no-credit "
+                         "backoff; overrides any reset hint parsed from --codex-error.")
+    sp.set_defaults(fn=cmd_review)
 
     sp = sub.add_parser("verify"); sp.add_argument("--built", default="ok")
     sp.add_argument("--health", default="ok"); sp.add_argument("--probe", default="ok")
@@ -961,6 +1131,12 @@ def main(argv=None):
     sub.add_parser("pm-pull").set_defaults(fn=cmd_pm_pull)
 
     sub.add_parser("dod").set_defaults(fn=cmd_dod)
+
+    sp = sub.add_parser("codex"); sp.add_argument("--probe", action="store_true")
+    sp.add_argument("--json", dest="as_json", action="store_true"); sp.set_defaults(fn=cmd_codex)
+
+    sp = sub.add_parser("agents"); sp.add_argument("--json", dest="as_json", action="store_true")
+    sp.set_defaults(fn=cmd_agents)
 
     sub.add_parser("trace-verify").set_defaults(fn=cmd_trace_verify)
     sub.add_parser("version").set_defaults(fn=cmd_version)

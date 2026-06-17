@@ -437,5 +437,217 @@ class FastLaneTests(TmpCase):
         self.assertEqual(self._cli("ship").returncode, 3)
 
 
+class CodexGracefulTests(TmpCase):
+    """Locks the GRACEFUL-codex contract: best-effort, NEVER a gate. The critical regression
+    locks are the ones that prove the rejected fail-closed behaviour can't return — codex never
+    changes an exit code; it only changes the trace record and stderr text."""
+    import argparse as _ap
+
+    def _cli(self, *a):
+        return subprocess.run([sys.executable, os.path.join(VROOT, "cli.py"), "--path", self.tmp]
+                              + list(a), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def _seat(self, tier, **kw):
+        """Call cli._codex_review_seat in-process with a fake args + monkeypatched probe."""
+        import cli
+        zd = os.path.join(self.tmp, ".zaude")
+        os.makedirs(zd, exist_ok=True)
+        args = self._ap.Namespace(codex=kw.get("codex", "auto"),
+                                  codex_verdict=kw.get("codex_verdict"),
+                                  codex_summary=kw.get("codex_summary", ""),
+                                  codex_error=kw.get("codex_error"),
+                                  codex_retry_at=kw.get("codex_retry_at"))
+        if "probe" in kw:
+            import lib.codex as cx
+            orig = cx.probe
+            cx.probe = lambda *a, **k: kw["probe"]
+            try:
+                return cli._codex_review_seat(zd, args, tier)
+            finally:
+                cx.probe = orig
+        return cli._codex_review_seat(zd, args, tier)
+
+    # ---- seat logic (in-process, deterministic, cross-platform) ----
+    def test_low_risk_skips_codex(self):
+        s = self._seat("T1")
+        self.assertEqual((s["outcome"], s["reason"]), ("skipped", "low_risk"))
+
+    def test_unclassified_skips_codex(self):
+        s = self._seat(None)
+        self.assertEqual(s["outcome"], "skipped")
+
+    def test_driver_verdict_recorded_as_used(self):
+        s = self._seat("T4", codex_verdict="fail", codex_summary="found X")
+        self.assertEqual((s["outcome"], s["verdict"]), ("used", "fail"))
+        self.assertTrue(s["enforced"])
+
+    def test_off_overrides_verdict(self):
+        # an explicit --codex off MUST win over a stray --codex-verdict (honest skip, not 'used')
+        s = self._seat("T4", codex="off", codex_verdict="pass")
+        self.assertEqual((s["outcome"], s["reason"]), ("skipped", "off"))
+        self.assertFalse(s["enforced"])
+
+    def test_enforced_only_on_used(self):
+        self.assertTrue(self._seat("T4", codex_verdict="pass")["enforced"])
+        self.assertFalse(self._seat("T1")["enforced"])
+        self.assertFalse(self._seat("T4", probe={"status": "missing", "detail": "x"})["enforced"])
+
+    def test_no_credit_wired_via_error_arms_backoff(self):
+        # the driver reports codex's quota/rate-limit error -> seat=no_credit AND backoff armed so
+        # codex auto-resumes only after the retry window (the user's explicit requirement).
+        import lib.codex as cx
+        zd = os.path.join(self.tmp, ".zaude"); os.makedirs(zd, exist_ok=True)
+        s = self._seat("T4", codex_error="Error: 429 rate limit exceeded",
+                       codex_retry_at="9999999999")
+        self.assertEqual(s["outcome"], "no_credit")
+        self.assertEqual(s["retry_at"], 9999999999.0)
+        self.assertFalse(cx.due_now(cx.read_status(zd)))   # in backoff -> not due yet
+
+    def test_ready_but_no_verdict_is_nudge_not_block(self):
+        s = self._seat("T4", probe={"status": "ready", "version": "1.0", "auth_source": "env",
+                                    "detail": "tok"})
+        self.assertEqual((s["outcome"], s["reason"]), ("skipped", "available_not_run"))
+        self.assertFalse(s["enforced"])   # the ONE visible gap — still proceeds
+
+    def test_missing_codex_records_unavailable(self):
+        s = self._seat("T4", probe={"status": "missing", "version": None, "auth_source": None,
+                                    "detail": "no codex"})
+        self.assertEqual((s["outcome"], s["reason"]), ("unavailable", "missing"))
+
+    def test_present_noauth_records_unavailable(self):
+        s = self._seat("T3", probe={"status": "present_noauth", "version": "1.0",
+                                    "auth_source": None, "detail": "no login"})
+        self.assertEqual((s["outcome"], s["reason"]), ("unavailable", "present_noauth"))
+
+    def test_no_credit_backoff_honored_without_probe(self):
+        import lib.codex as cx
+        zd = os.path.join(self.tmp, ".zaude"); os.makedirs(zd, exist_ok=True)
+        cx.note_no_credit(zd, "quota", time.time() + 3600)   # blocked, future reset
+        # probe must NOT be consulted while in backoff -> patch it to blow up if called
+        called = {"n": 0}
+        orig = cx.probe; cx.probe = lambda *a, **k: called.__setitem__("n", 1) or {"status": "ready"}
+        try:
+            s = self._seat("T4")
+        finally:
+            cx.probe = orig
+        self.assertEqual(s["outcome"], "no_credit")
+        self.assertEqual(called["n"], 0)
+
+    # ---- codex.py pure helpers ----
+    def test_due_now(self):
+        import lib.codex as cx
+        self.assertTrue(cx.due_now({"retry": {"blocked": False}}))
+        self.assertTrue(cx.due_now({"retry": {"blocked": True, "retry_at": None}}))
+        self.assertTrue(cx.due_now({"retry": {"blocked": True, "retry_at": time.time() - 10}}))
+        self.assertFalse(cx.due_now({"retry": {"blocked": True, "retry_at": time.time() + 999}}))
+
+    def test_classify_error(self):
+        import lib.codex as cx
+        self.assertEqual(cx.classify_error(1, "Error: out of credit")["reason"], cx.QUOTA)
+        self.assertEqual(cx.classify_error(1, "429 rate limit exceeded")["reason"], cx.RATE_LIMIT)
+        self.assertEqual(cx.classify_error(1, "401 unauthorized")["reason"], cx.AUTH)
+        r = cx.classify_error(1, "rate limit; retry-after: 120s", now=1000.0)
+        self.assertEqual(r["retry_at"], 1120.0)
+
+    def test_token_symlink_refused(self):
+        import lib.codex as cx
+        # a symlink at the secret path must be refused by _secret_ok (mirrors the PAT contract)
+        if not hasattr(os, "symlink"):
+            self.skipTest("no symlink")
+        target = os.path.join(self.tmp, "evil"); open(target, "w").write("tok")
+        link = os.path.join(self.tmp, "codexlink")
+        try:
+            os.symlink(target, link)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlink not permitted")
+        orig = cx._SECRET_FILE
+        cx._SECRET_FILE = link
+        try:
+            self.assertFalse(cx._secret_ok())
+        finally:
+            cx._SECRET_FILE = orig
+
+    # ---- integration: the anti-fail-closed locks ----
+    def test_codex_absence_never_blocks_ship(self):
+        """Full T4 lifecycle; codex recorded unavailable at /review -> /ship STILL proceeds."""
+        import cli
+        self.assertEqual(self._cli("init", "--text", "x", "--mode", "enforce").returncode, 0)
+        for cmd in (["clarify", "--acceptance", "x"], ["prioritize", "--decision", "n"],
+                    ["plan", "--steps", "a"], ["design", "--approach", "x", "--decision", "D"],
+                    ["classify-risk", "--tier", "T4"], ["approve", "--by", "op"], ["implement"],
+                    ["test", "--cmd", "t", "--exit", "0"]):
+            self.assertEqual(self._cli(*cmd).returncode, 0, cmd)
+        # /review in-process with codex forced MISSING
+        import lib.codex as cx
+        orig = cx.probe
+        cx.probe = lambda *a, **k: {"status": "missing", "version": None, "auth_source": None,
+                                    "detail": "absent", "checked_at": time.time()}
+        try:
+            rc = cli.cmd_review(self._ap.Namespace(path=self.tmp, summary="", unresolved="0",
+                                                   codex="auto", codex_verdict=None, codex_summary=""))
+        finally:
+            cx.probe = orig
+        self.assertEqual(rc, 0)
+        ledger = json.load(open(os.path.join(self.tmp, ".zaude", "artifacts",
+                                             "review-ledger.json"), encoding="utf-8"))
+        self.assertEqual(ledger["review_seats"]["codex"]["outcome"], "unavailable")
+        for cmd in (["verify"], ["shippable"], ["ship", "--deploy-id", "d1"]):
+            self.assertEqual(self._cli(*cmd).returncode, 0, cmd)   # absence NEVER blocks ship
+
+    def test_doctor_exit0_regardless_of_codex(self):
+        """doctor must NEVER fail because of codex state (anti-fail-closed lock)."""
+        self._cli("init", "--text", "x", "--mode", "enforce")
+        self.assertEqual(self._cli("doctor").returncode, 0)
+
+    def test_codex_status_command_exits_0(self):
+        self._cli("init", "--text", "x", "--mode", "enforce")
+        r = self._cli("codex", "--json")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("status", json.loads(r.stdout))
+
+
+class AgentPresenceTests(TmpCase):
+    """Finding #4.1 — required-agent visibility. Uses SYNTHETIC agent names so the real
+    ~/.claude/agents on the dev machine can't make the assertions flaky."""
+    import argparse as _ap
+
+    def _cli(self, *a):
+        return subprocess.run([sys.executable, os.path.join(VROOT, "cli.py"), "--path", self.tmp]
+                              + list(a), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def test_check_present_and_missing(self):
+        import lib.agents as ag
+        d = os.path.join(self.tmp, ".claude", "agents")
+        os.makedirs(d, exist_ok=True)
+        open(os.path.join(d, "zztest-present-abc.md"), "w").write("x")
+        r = ag.check(self.tmp, required=["zztest-present-abc", "zztest-missing-xyz"])
+        self.assertEqual(r["present"], ["zztest-present-abc"])
+        self.assertEqual(r["missing"], ["zztest-missing-xyz"])
+
+    def test_discover_never_raises_on_absent_dirs(self):
+        import lib.agents as ag
+        # a project with no .claude/agents must not raise — just contributes nothing
+        self.assertIsInstance(ag.discover_installed(self.tmp), set)
+
+    def test_doctor_exit0_even_with_missing_agents(self):
+        # advisory only — missing required agents must NOT flip doctor's exit code
+        self._cli("init", "--text", "x", "--mode", "enforce")
+        self.assertEqual(self._cli("doctor").returncode, 0)
+
+    def test_agents_command_exits_0(self):
+        self._cli("init", "--text", "x", "--mode", "enforce")
+        r = self._cli("agents", "--json")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("missing", json.loads(r.stdout))
+
+    def test_required_agents_match_policy(self):
+        # drift-lock (codex LOW): the runtime REQUIRED_AGENTS must equal policy.json's documented
+        # dispatch.required_agents, so the two can't silently diverge.
+        import lib.agents as ag
+        with open(_POLICY, encoding="utf-8") as f:
+            pol = json.load(f)
+        self.assertEqual(ag.REQUIRED_AGENTS, pol["dispatch"]["required_agents"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
