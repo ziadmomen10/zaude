@@ -12,7 +12,7 @@ import subprocess
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib import (paths, trace, state as st, pm, onboard, gates, codex, agents,  # noqa: E402
-                 persona, router, memory, vault)
+                 persona, router, memory, vault, opencode)
 
 
 def _kernel_version():
@@ -230,84 +230,96 @@ def _seat(outcome, verdict=None, summary=None, reason=None, retry_at=None, now=N
     return s
 
 
-def _codex_review_seat(zd, args, tier):
-    """Build the honest, NON-BLOCKING codex seat for the review ledger. NEVER refuses and NEVER
-    changes the exit code — codex is best-effort. The whole body is guarded so an unexpected raise
-    degrades to a benign 'unavailable' record instead of crashing /review (the "never raises into
-    the cycle" guarantee is total, not emergent). [L13/graceful-codex]"""
+def _panel_seat(zd, tier, mod, label, mode, verdict, summary, err, retry_arg, fix_hint=""):
+    """Build the honest, NON-BLOCKING seat for ONE best-effort external reviewer (codex OR opencode)
+    in the review ledger. `mod` is that reviewer's leaf lib. NEVER refuses, NEVER changes the exit
+    code, NEVER raises into the cycle — both reviewers are best-effort and the ship gate reads ONLY
+    `unresolved_critical_high`, so a seat NEVER sets the gate by itself. The whole body is guarded so
+    an unexpected raise degrades to a benign 'unavailable' record. [L13/graceful external reviewers]"""
     now = time.time()
     try:
-        mode = (getattr(args, "codex", "auto") or "auto")
-        verdict = getattr(args, "codex_verdict", None)
-        summary = (getattr(args, "codex_summary", "") or "")[:500]
-        err = getattr(args, "codex_error", None)
-        retry_arg = getattr(args, "codex_retry_at", None)
+        mode = (mode or "auto")
+        summary = (summary or "")[:500]
 
         # 1. Explicit operator skip wins over everything else (incl. a stray verdict) — honest:
-        #    the operator turned codex off for THIS review. (codex-review-MEDIUM: off must win.)
+        #    the operator turned this reviewer off for THIS review. (off must win.)
         if mode in ("off", "never"):
-            sys.stderr.write("codex: skipped by --codex %s for this review; continuing.\n" % mode)
+            sys.stderr.write("%s: skipped by flag for this review; continuing.\n" % label)
             return _seat("skipped", reason=mode, now=now)
 
-        # 2. Below T3 codex isn't part of the panel (light by default).
+        # 2. Below T3 the external panel isn't engaged (light by default).
         if tier not in gates.HIGH_RISK:
             return _seat("skipped", reason="low_risk", now=now)
 
-        # 3. Driver ran codex and got a verdict -> honest 'used'. Codex is clearly back -> clear
-        #    any no-credit backoff so it re-participates next time.
+        # 3. Driver ran it and got a verdict -> honest 'used'. Clearly back -> clear any backoff.
         if verdict:
-            codex.clear_retry(zd)
+            mod.clear_retry(zd)
             return _seat("used", verdict=verdict, summary=summary, now=now)
 
-        # 4. Driver ran codex but it FAILED (quota / rate-limit / auth) and reported the error ->
-        #    record honestly AND arm the no-credit backoff so codex AUTO-RESUMES when the reset
-        #    window passes (the user's explicit requirement). [codex-review-HIGH wired here]
+        # 4. Driver ran it but it FAILED (quota / rate-limit / auth) and reported the error -> record
+        #    honestly AND arm the no-credit backoff so it AUTO-RESUMES when the reset window passes.
         if err:
-            cls = codex.classify_error(1, err, now=now)
-            # explicit --codex-retry-at wins, but a BAD value must not discard a valid hint
-            # parsed from codex's stderr (codex re-review LOW).
-            ra = codex.parse_retry_at(retry_arg) if retry_arg else None
+            cls = mod.classify_error(1, err, now=now)
+            ra = mod.parse_retry_at(retry_arg) if retry_arg else None
             if ra is None:
                 ra = cls.get("retry_at")
-            if cls["reason"] in (codex.QUOTA, codex.RATE_LIMIT):
-                codex.note_no_credit(zd, cls["reason"], ra)
-                sys.stderr.write("codex: %s — continuing without it; will auto-resume%s.\n"
-                                 % (cls["reason"], " at the retry window" if ra else
+            if cls["reason"] in (mod.QUOTA, mod.RATE_LIMIT):
+                mod.note_no_credit(zd, cls["reason"], ra)
+                sys.stderr.write("%s: %s — continuing without it; will auto-resume%s.\n"
+                                 % (label, cls["reason"], " at the retry window" if ra else
                                     " on the next review"))
                 return _seat("no_credit", reason=cls["reason"], retry_at=ra, now=now)
-            sys.stderr.write("codex: error (%s) — continuing without it.\n" % cls["reason"])
+            sys.stderr.write("%s: error (%s) — continuing without it.\n" % (label, cls["reason"]))
             return _seat("unavailable", reason=cls["reason"], now=now)
 
-        # 5. No verdict/err: honor a live no-credit backoff (don't hammer a rate-limited provider;
-        #    due_now() returns True again once the stored retry_at passes -> auto-resume).
-        status = codex.read_status(zd)
-        if not codex.due_now(status, now):
+        # 5. No verdict/err: honor a live no-credit backoff (auto-resumes once retry_at passes).
+        status = mod.read_status(zd)
+        if not mod.due_now(status, now):
             r = status.get("retry") or {}
-            sys.stderr.write("codex: in a no-credit/rate-limit backoff — continuing without it "
-                             "(auto-resumes at the retry window).\n")
+            sys.stderr.write("%s: in a no-credit/rate-limit backoff — continuing without it "
+                             "(auto-resumes at the retry window).\n" % label)
             return _seat("no_credit", reason=r.get("reason"), retry_at=r.get("retry_at"), now=now)
 
-        # 6. Probe availability for the honest record + the soft "you have codex, use it" nudge.
-        pr = codex.probe()
-        if pr.get("status") == codex.READY:
+        # 6. Probe availability for the honest record + the soft "you have it, use it" nudge.
+        pr = mod.probe()
+        if pr.get("status") == mod.READY:
             loud = (mode == "on")
-            msg = ("codex is AVAILABLE and this is %s — run it and pass --codex-verdict "
-                   "pass|concerns|fail (recorded as available-but-not-run).\n" % tier)
-            sys.stderr.write(("NUDGE: " + msg) if loud else ("codex: " + msg))
+            msg = ("%s is AVAILABLE and this is %s — run it and pass --%s-verdict "
+                   "pass|concerns|fail (recorded as available-but-not-run).\n" % (label, tier, label))
+            sys.stderr.write(("NUDGE: " + msg) if loud else ("%s: " % label + msg))
             return _seat("skipped", reason="available_not_run", now=now,
                          version=pr.get("version"), auth_source=pr.get("auth_source"))
-        if pr.get("status") == codex.PRESENT_NOAUTH:
-            sys.stderr.write("codex: installed but not logged in — continuing without it. Run "
-                             "`codex login` or drop a token at ~/.zaude/secrets/codex.\n")
+        if pr.get("status") == mod.PRESENT_NOAUTH:
+            sys.stderr.write("%s: installed but not authenticated — continuing without it.%s\n"
+                             % (label, (" " + fix_hint) if fix_hint else ""))
             return _seat("unavailable", reason="present_noauth", now=now)
-        sys.stderr.write("codex: not installed — continuing without it.\n")
+        sys.stderr.write("%s: not installed — continuing without it.\n" % label)
         return _seat("unavailable", reason="missing", now=now)
-    except Exception as e:   # the cycle must NEVER fail because of codex
+    except Exception as e:   # the cycle must NEVER fail because of a best-effort reviewer
         try:
-            sys.stderr.write("codex: seat error (%s) — continuing without it.\n" % str(e)[:80])
+            sys.stderr.write("%s: seat error (%s) — continuing without it.\n" % (label, str(e)[:80]))
         except Exception:
             pass
         return _seat("unavailable", reason="seat_error", now=now)
+
+
+def _codex_review_seat(zd, args, tier):
+    """The codex seat (best-effort; never gates). [L13/graceful-codex]"""
+    return _panel_seat(zd, tier, codex, "codex",
+                       getattr(args, "codex", "auto"), getattr(args, "codex_verdict", None),
+                       getattr(args, "codex_summary", ""), getattr(args, "codex_error", None),
+                       getattr(args, "codex_retry_at", None),
+                       fix_hint="Run `codex login` or drop a token at ~/.zaude/secrets/codex.")
+
+
+def _opencode_review_seat(zd, args, tier):
+    """The OpenCode seat — a third, MODEL-DIVERSE best-effort reviewer (provider-agnostic). Same
+    contract as codex: never gates, never raises. [L13/graceful external reviewers]"""
+    return _panel_seat(zd, tier, opencode, "opencode",
+                       getattr(args, "opencode", "auto"), getattr(args, "opencode_verdict", None),
+                       getattr(args, "opencode_summary", ""), getattr(args, "opencode_error", None),
+                       getattr(args, "opencode_retry_at", None),
+                       fix_hint="Run `opencode auth login` to configure a provider.")
 
 
 def cmd_review(args):
@@ -317,9 +329,13 @@ def cmd_review(args):
     zd, root = _resolve(args)
     tier = st.reduce(trace.read_trace(zd, root, verify=True))["risk_tier"]
     unresolved = int(args.unresolved)
-    seat = _codex_review_seat(zd, args, tier)
+    # TWO best-effort external seats (codex + opencode); each is independent and NEITHER touches
+    # `unresolved_critical_high` — the ship gate reads only that, so neither seat can gate. The
+    # driver folds any verdict it wants to HONOR into --unresolved itself.
+    seats = {"codex": _codex_review_seat(zd, args, tier),
+             "opencode": _opencode_review_seat(zd, args, tier)}
     obj = {"findings_summary": args.summary, "unresolved_critical_high": unresolved,
-           "risk_tier_at_review": tier, "review_seats": {"codex": seat}}
+           "risk_tier_at_review": tier, "review_seats": seats}
     return _commit(zd, root, "Tested", "Reviewed", "/review", "review-ledger.json", obj)
 
 
@@ -1419,6 +1435,31 @@ def cmd_codex(args):
     return 0
 
 
+def cmd_opencode(args):
+    """Read-only OpenCode status (availability + retry window) for the third best-effort review
+    seat. Always exits 0 — like /codex, it's a status view, never a gate. [graceful external reviewers]"""
+    zd, root = _resolve(args)
+    d = opencode.read_status(zd)
+    if getattr(args, "probe", False) or not d.get("last_probe"):
+        pr = opencode.probe()
+        d["last_probe"] = pr
+        opencode.write_status(zd, d)
+    else:
+        pr = d["last_probe"]
+    retry = d.get("retry") or {}
+    if getattr(args, "as_json", False):
+        print(json.dumps({"status": pr.get("status"), "version": pr.get("version"),
+                          "detail": pr.get("detail"), "retry": retry}))
+        return 0
+    print("opencode: %s (%s)" % (pr.get("status"), pr.get("detail") or ""))
+    print("retry: %s" % ("blocked reason=%s retry_at=%s" % (retry.get("reason"), retry.get("retry_at"))
+                         if retry.get("blocked") else "none"))
+    if pr.get("status") != opencode.READY:
+        print("hint: install OpenCode and run `opencode auth login` to configure a provider "
+              "(it can run Gemini/GPT/local models). Best-effort — reviews proceed without it.")
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="zaude")
     p.add_argument("--path", default=None)
@@ -1485,6 +1526,17 @@ def main(argv=None):
     sp.add_argument("--codex-retry-at", dest="codex_retry_at", default=None,
                     help="explicit retry time (epoch seconds or ISO-8601) for a codex no-credit "
                          "backoff; overrides any reset hint parsed from --codex-error.")
+    # third best-effort, model-diverse seat: OpenCode (provider-agnostic). Same contract as codex.
+    sp.add_argument("--opencode", choices=("auto", "on", "off", "never"), default="auto")
+    sp.add_argument("--opencode-verdict", dest="opencode_verdict",
+                    choices=("pass", "concerns", "fail"), default=None)
+    sp.add_argument("--opencode-summary", dest="opencode_summary", default="")
+    sp.add_argument("--opencode-error", dest="opencode_error", default=None,
+                    help="opencode's error output when it FAILED. Arms the no-credit backoff so it "
+                         "auto-resumes when the reset window passes.")
+    sp.add_argument("--opencode-retry-at", dest="opencode_retry_at", default=None,
+                    help="explicit retry time (epoch seconds or ISO-8601) for an opencode no-credit "
+                         "backoff; overrides any reset hint parsed from --opencode-error.")
     sp.set_defaults(fn=cmd_review)
 
     sp = sub.add_parser("verify"); sp.add_argument("--built", default="ok")
@@ -1569,6 +1621,9 @@ def main(argv=None):
 
     sp = sub.add_parser("codex"); sp.add_argument("--probe", action="store_true")
     sp.add_argument("--json", dest="as_json", action="store_true"); sp.set_defaults(fn=cmd_codex)
+
+    sp = sub.add_parser("opencode"); sp.add_argument("--probe", action="store_true")
+    sp.add_argument("--json", dest="as_json", action="store_true"); sp.set_defaults(fn=cmd_opencode)
 
     sp = sub.add_parser("scan-markers"); sp.add_argument("path", nargs="?", default=None)
     sp.set_defaults(fn=cmd_scan_markers)

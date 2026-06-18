@@ -37,6 +37,7 @@
     {"name": "dod",          "cli": "dod",           "group": "control",   "summary": "Definition-of-Done / autonomous-loop end-condition (tier-4 = done-with-evidence)."},
     {"name": "persona",      "cli": "persona",       "group": "control",   "summary": "Operator-learning persona — the distilled 'decide as the operator would' profile loaded first in autonomous mode."},
     {"name": "codex",        "cli": "codex",         "group": "control",   "summary": "Show codex review-seat status (availability + token + retry window). Best-effort; never gates."},
+    {"name": "opencode",     "cli": "opencode",      "group": "control",   "summary": "Show OpenCode review-seat status (the third, model-diverse best-effort reviewer). Never gates."},
     {"name": "agents",       "cli": "agents",        "group": "control",   "summary": "Report which required capability agents are installed vs MISSING (advisory; install separately)."},
     {"name": "next",         "cli": "next",          "group": "control",   "summary": "Print the next lifecycle command for the current state (autonomous-loop helper; stops at DoD)."},
     {"name": "route",        "cli": "route",         "group": "control",   "summary": "INTENT DETECTION: map a natural-language request to the right command + a safety mode (auto/propose/confirm)."},
@@ -75,8 +76,9 @@
   "dispatch": {
     "always_invoke_reviewers": ["code-reviewer", "architect-review", "security-auditor"],
     "required_agents": ["code-reviewer", "architect-review", "security-auditor", "workflow-orchestrator", "backend-developer", "frontend-developer", "design-bridge"],
-    "external_reviewer": "codex",
+    "external_reviewers": ["codex", "opencode"],
     "external_reviewer_best_effort": true,
+    "external_reviewers_note": "BOTH are advisory/best-effort, NEVER required: a missing/unauth/out-of-credit/crashed external reviewer never blocks /review or /ship. The ship gate reads ONLY unresolved_critical_high.",
     "tiers": {
       "T0": "trivial (docs/comments/format) — fast lane, audit only",
       "T1": "small fix — code flows; evidence (tests) before ship",
@@ -88,9 +90,9 @@
 
   "review_panel": {
     "panel_from_tier": "T3",
-    "seats": ["claude_lenses", "codex"],
-    "shadow": ["opencode"],
-    "rule": "Unresolved CRITICAL/HIGH from any AVAILABLE reviewer blocks /ship. Codex is BEST-EFFORT: if it is not installed/logged-in or is out of credit, the cycle continues WITHOUT it (recorded honestly) — codex absence NEVER blocks. An available-but-unrun codex is a non-blocking nudge. opencode runs shadow until it earns a seat."
+    "seats": ["claude_lenses", "codex", "opencode"],
+    "shadow": [],
+    "rule": "Claude lenses always run. Codex and OpenCode are BEST-EFFORT external seats: a missing / unauthenticated / out-of-credit / timed-out / crashed / skipped reviewer NEVER blocks /review or /ship — the cycle continues without it (recorded honestly), and an available-but-unrun reviewer is a non-blocking nudge. The two seats are independent (one's no-credit backoff never affects the other). The ship gate reads ONLY unresolved_critical_high — no seat sets the gate by itself; the driver folds any verdict it wants to honor into that count. OpenCode is provider-agnostic, so it adds a MODEL-DIVERSE third voice (e.g. Gemini/GPT/local)."
   },
 
   "hooks": {

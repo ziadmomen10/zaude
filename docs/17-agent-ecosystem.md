@@ -13,7 +13,17 @@ The most important "agent" choice is the **harness + model**, not a markdown sub
 | Terminal-Bench 2.1 | **Codex CLI + GPT-5.5 — 83.4%** | Claude Code + Opus 4.8 — 78.9% |
 | SWE-bench Pro | **Claude Opus 4.8 — 69.2%** | GPT-5.5, Gemini 3.1 Pro behind |
 
-Zaude's review panel runs **Claude (Opus 4.8)** lenses and pairs them with **best-effort Codex (GPT-5.5)** when available — the two leading agentic harnesses, each #1 on a different benchmark. That two-seat design is the benchmark-best combination available in 2026; the market scan **validated** it rather than replacing it. (Codex stays best-effort and never gates — see the graceful-codex design; absence is recorded honestly and the cycle continues on Claude lenses alone.)
+Zaude's review panel runs **Claude (Opus 4.8)** lenses and pairs them with **best-effort Codex (GPT-5.5)** — the two leading agentic harnesses, each #1 on a different benchmark — plus a **third best-effort seat, OpenCode**. That design is the benchmark-best combination available in 2026; the market scan **validated** it rather than replacing it. (All external seats stay best-effort and never gate — see the graceful-codex design; absence is recorded honestly and the cycle continues on Claude lenses alone.)
+
+### The three review-panel seats
+
+| Seat | Harness / model | Role | Gates? |
+|---|---|---|---|
+| `claude_lenses` | Claude Opus 4.8 (#1 SWE-bench Pro) | always-on reviewer | the lenses produce the findings, but the ship gate reads only `unresolved_critical_high` |
+| `codex` | Codex CLI / GPT-5.5 (#1 Terminal-Bench) | best-effort second opinion | **never** |
+| `opencode` | OpenCode (172K★ OSS, **provider-agnostic**) | best-effort, **model-diverse** third voice (Gemini / GPT / local) | **never** |
+
+OpenCode earns the third seat precisely because it is **provider-agnostic**: it can run a *different model family* than Claude or Codex, so the panel gets genuine model diversity rather than a third Claude/GPT echo. Each external seat is independent — one's no-credit backoff never affects the other — and the kernel records each honestly (`zaude opencode` / `zaude codex` show availability + retry window). The driver runs it headless (`opencode run --model <provider/model> "<prompt>"`) and reports the verdict via `zaude review --opencode-verdict pass|concerns|fail`; **a missing / unauthenticated / out-of-credit / crashed OpenCode never blocks `/review` or `/ship`.**
 
 ## Subagent packs: no single winner → a ranked, caveated catalog
 
@@ -44,6 +54,6 @@ Zaude's role names differ slightly from upstream slugs; install and alias as nee
 
 A missing agent **never** fails the cycle or changes an exit code — a fresh machine legitimately has none, and the review panel degrades gracefully (Claude lenses always run; Codex is best-effort). The refresh only makes the gap **actionable**: sourced, ranked, with the least-privilege and pin-a-commit caveats surfaced.
 
-## Adjacent landscape (not adopted, noted for completeness)
+## Adjacent landscape (noted for completeness)
 
-OpenCode (most-starred OSS agent harness) and Antigravity 2.0 (Google, May 2026) are **harnesses**, not subagent packs — out of scope for Zaude's `~/.claude/agents/` layer, but worth watching if the panel ever grows a third seat. `ClaudeFast Code Kit` packages pre-tested hooks for teams that want an assembled kit rather than raw packs.
+**OpenCode** (most-starred OSS agent harness, 172K★) is now the panel's **third best-effort seat** (above) rather than a subagent pack — adopted for its provider-agnostic model diversity. **Antigravity 2.0** (Google, May 2026) is another harness and a candidate for a *fourth* seat if a fourth model family is ever wanted; the seat machinery (`lib/opencode.py` mirroring `lib/codex.py`) generalizes to it. `ClaudeFast Code Kit` packages pre-tested hooks for teams that want an assembled kit rather than raw packs.
