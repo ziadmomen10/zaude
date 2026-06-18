@@ -97,7 +97,7 @@
 
   "hooks": {
     "PreToolUse": {
-      "matcher": "Edit|Write|MultiEdit",
+      "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
       "command": "python \"$HOME/.zaude/bin/zhook.py\" pre_tool_use",
       "timeout": 10
     }

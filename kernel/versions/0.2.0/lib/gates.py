@@ -5,6 +5,12 @@ A gate is `fn(ctx) -> GateResult`. evaluate() runs the registry, first deny wins
 WAIVERS: if the deciding gate is waived (an operator-approved `/waive` row in the trace) the
 deny is downgraded to allow — but the use is still recorded. This is what makes "skip the gate"
 possible only via an explicit, logged waiver (vs v1, where skipping is silent). [L1.4]
+
+The hook matcher now includes Bash (and NotebookEdit), so `protect_zaude` / `design_before_impl`
+have Bash counterparts (`*_bash`) that catch a Bash file-write which would otherwise SILENTLY
+evade the Edit/Write gates (architecture-review finding A). The Bash write detectors are HEURISTIC
+TRIPWIRES for the accidental/naive case — NOT a boundary against a determined Bash user (who can
+reach the key and the shell); see docs/18-threat-model.md for the honest scope.
 """
 import os
 import re
@@ -22,6 +28,28 @@ _DEPLOY_RE = re.compile(
     r"(docker\s+push|kubectl\s+(apply|rollout)|terraform\s+apply|helm\s+(up|install)|"
     r"serverless\s+deploy|vercel\s+.*--prod|fly(ctl)?\s+deploy|npm\s+publish|"
     r"\bci-deploy|\bdeploy\.sh|supabase\s+functions\s+deploy|git\s+push\s+.*\bprod)",
+    re.IGNORECASE,
+)
+
+# Bash WRITE tripwires (finding A): the hook also matches Bash, so a Bash file-write can no longer
+# silently evade the Edit/Write gates. These are HEURISTIC TRIPWIRES for the ACCIDENTAL/naive case
+# (a determined Bash user has other escapes — see docs/18-threat-model.md); they detect a write that
+# TARGETS a .zaude/ path or a source file, not merely a command that mentions one (so `cat .zaude/x`
+# or `cat app.ts` read-only is not flagged, and the kernel's own `zaude` CLI is never flagged).
+_SRC_EXT_ALT = "|".join(e.lstrip(".") for e in SRC_EXT)
+# Only verbs whose mere involvement with a .zaude path is UNAMBIGUOUSLY a mutation of it (delete /
+# move-out / move-in / shrink). Read-capable verbs (cp/dd/tee/chmod/chown/ln/install) are OMITTED:
+# .zaude could be their SOURCE (`cp .zaude/x /tmp`, `dd if=.zaude`, `tee /tmp < .zaude`), and since
+# this gate is NOT waivable, flagging a legit read would be a hard false-deny. [codex review]
+_ZAUDE_WRITE_RE = re.compile(
+    r">>?\s*['\"]?[^\s|;&<>]*\.zaude(?:[\\/]|\b)"                          # redirect INTO .zaude (write)
+    r"|\b(?:rm|mv|truncate|shred|rmdir)\b[^|;&\n]*?\.zaude(?:[\\/]|\b)"    # unambiguous mutator -> .zaude
+    r"|\bsed\b[^|;&\n]*-i[^|;&\n]*?\.zaude(?:[\\/]|\b)",                   # in-place edit -> .zaude
+    re.IGNORECASE,
+)
+_SRC_WRITE_RE = re.compile(
+    r"(?:>>?\s*['\"]?[^\s|;&<>]*|(?:\btee\b|\bsed\b[^|;&\n]*-i)[^|;&\n]*?)"
+    r"\.(?:%s)\b" % _SRC_EXT_ALT,
     re.IGNORECASE,
 )
 
@@ -119,19 +147,54 @@ def deploy_needs_release_token(ctx):
     return GateResult("allow")
 
 
-GATES = [protect_zaude, design_before_impl, deploy_needs_release_token]
+def protect_zaude_bash(ctx):
+    """Bash counterpart of protect_zaude (finding A): a Bash command that WRITES/DELETES a path under
+    .zaude/ is denied, NOT waivable. The hook now matches Bash, so this can fire. HEURISTIC TRIPWIRE
+    for the accidental/naive case (a determined Bash user has other escapes — docs/18); the kernel's
+    own `zaude` CLI writes .zaude via its atomic writer and is NOT flagged (no write-op targets the
+    state dir in a launcher invocation)."""
+    if ctx.tool == "Bash" and ctx.command and _ZAUDE_WRITE_RE.search(ctx.command):
+        return GateResult("deny",
+                          "protected: that Bash command writes under .zaude/ (the signed source of "
+                          "truth). Use `zaude` commands; never write .zaude/ directly.", waivable=False)
+    return GateResult("allow")
+
+
+def design_before_impl_bash(ctx):
+    """Bash counterpart of design_before_impl (finding A): at high risk (T3/T4) before design+approve,
+    a Bash command that writes to a SOURCE file is denied (waivable, shares the design-before-impl
+    waiver). HEURISTIC TRIPWIRE for the accidental case — docs/18."""
+    if (ctx.tool == "Bash" and ctx.command
+            and ctx.state.get("risk_tier") in HIGH_RISK
+            and ctx.current not in _state.SRC_EDIT_ALLOWED_FROM
+            and _SRC_WRITE_RE.search(ctx.command)):
+        return GateResult(
+            "deny",
+            "design-before-impl: that Bash command writes source at risk %s before design + "
+            "/approve. Next: /design → /approve (or use the Edit tool). Waiver: /waive "
+            "design-before-impl <reason>." % ctx.state.get("risk_tier"))
+    return GateResult("allow")
+
+
+# a `/waive design-before-impl` covers BOTH the Edit and the Bash source-write gate (same intent).
+design_before_impl_bash.waiver_id = "design_before_impl"
+
+GATES = [protect_zaude, protect_zaude_bash, design_before_impl, design_before_impl_bash,
+         deploy_needs_release_token]
 
 
 def evaluate(projection, tool, tool_input, zaude_dir):
     """Run all gates; first deny wins. A deny on a WAIVED, waivable gate becomes an allow
-    (recorded as 'allow-waived'). Returns (decision, reason, gate_name)."""
+    (recorded as 'allow-waived'). A gate may set `.waiver_id` to SHARE a waiver with another gate
+    (the Bash source-write gate shares design_before_impl's). Returns (decision, reason, gate_name)."""
     ctx = GateContext(projection, tool, tool_input, zaude_dir)
     # Normalize so `/waive design-before-impl` and `design_before_impl` both match the gate id. [codex-MED]
     waived = {w.replace("-", "_") for w in (projection.get("waived_gates") or set())}
     for g in GATES:
         res = g(ctx)
         if res["decision"] == "deny":
-            if res["waivable"] and g.__name__ in waived:
-                return ("allow-waived", "waived: " + g.__name__, g.__name__)
+            wid = getattr(g, "waiver_id", g.__name__)
+            if res["waivable"] and wid in waived:
+                return ("allow-waived", "waived: " + wid, g.__name__)
             return ("deny", res["reason"], g.__name__)
     return ("allow", "", "")
