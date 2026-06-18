@@ -175,6 +175,8 @@ Zaude 1's full user guide is in [`docs/`](./docs/) (chapters 01–14) and stays 
 |---|---|---|
 | 15 | [The 2.0 engine](./docs/15-zaude-2-engine.md) | Kernel, state machine, trace, gates, fast lane, install/update |
 | 16 | [The operator-learning layer](./docs/16-operator-learning-layer.md) | Intent routing, persona, collective memory — research, design, privacy model |
+| 17 | [The agent ecosystem](./docs/17-agent-ecosystem.md) | The three review-panel seats (Claude + Codex + OpenCode) + the ranked capability-agent sources |
+| 18 | [Threat model](./docs/18-threat-model.md) | What Zaude defends vs doesn't — the attacker matrix, trust boundaries, honest scope of the gates |
 
 The original chapters (architecture, vault, commands, hooks, memory, agents, workflow, best practices) describe the conventions Zaude 2.0 builds on and still honors.
 
