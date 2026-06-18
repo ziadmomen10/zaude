@@ -1246,6 +1246,34 @@ def cmd_repair(args):
     return 0
 
 
+def cmd_scan_markers(args):
+    """PREFLIGHT audit for the fail-closed marker behavior: walk a tree and report every
+    .zaude/project.json and how the hook would treat it — onboarded / BROKEN (would fail closed) /
+    foreign (parses but not a valid claim here -> fails open). Run this before relying on
+    fail-closed so a stray or corrupt marker can't surprise you. Read-only. [codex co-plan #3]"""
+    base = paths._real(args.path or os.getcwd())
+    skip = {".git", "node_modules", "__pycache__", ".hg", ".svn", ".venv", "venv", "dist"}
+    found = broken = 0
+    for dp, dns, fns in os.walk(base):
+        dns[:] = [d for d in dns if d not in skip]
+        if os.path.basename(dp) == ".zaude" and "project.json" in fns:
+            d = os.path.dirname(dp)
+            found += 1
+            m = paths._load_marker(d)
+            if isinstance(m, dict):
+                print("ok       %s  [%s]" % (d, m.get("enforcement_mode")))
+            elif m is None:
+                print("foreign  %s  (parses but not a valid marker for this dir -> fail OPEN)" % d)
+            else:
+                broken += 1
+                print("BROKEN   %s  (%s -> would FAIL CLOSED)" % (d, m.reason))
+    print("\n%d marker(s) under %s; %d would FAIL CLOSED." % (found, base, broken))
+    if broken:
+        print("Fix each BROKEN: re-onboard (`zaude onboard`), restore the file, or — if it is not "
+              "a Zaude project — delete/rename .zaude/project.json. ZAUDE_DISABLE=1 bypasses all.")
+    return 1 if broken else 0
+
+
 def cmd_doctor(args):
     zd, root = _resolve(args)
     issues = []
@@ -1482,6 +1510,8 @@ def main(argv=None):
     sp = sub.add_parser("codex"); sp.add_argument("--probe", action="store_true")
     sp.add_argument("--json", dest="as_json", action="store_true"); sp.set_defaults(fn=cmd_codex)
 
+    sp = sub.add_parser("scan-markers"); sp.add_argument("path", nargs="?", default=None)
+    sp.set_defaults(fn=cmd_scan_markers)
     sp = sub.add_parser("agents"); sp.add_argument("--json", dest="as_json", action="store_true")
     sp.set_defaults(fn=cmd_agents)
 
