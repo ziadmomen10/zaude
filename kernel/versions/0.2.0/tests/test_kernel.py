@@ -187,6 +187,49 @@ class GateTests(TmpCase):
                            waived=["design-before-impl"], risk="T4")
         self.assertEqual(d, "allow-waived")
 
+    # ---- finding A: Bash file-writes can no longer silently evade the Edit/Write gates ----
+    def _bash(self, current, command, **kw):
+        return self._ev(current, "Bash", {"command": command}, **kw)
+
+    def test_bash_write_to_zaude_denied_not_waivable(self):
+        d, _, g = self._bash("Approved", "echo x > .zaude/trace.jsonl")
+        self.assertEqual((d, g), ("deny", "protect_zaude_bash"))
+        # rm of the state dir is the same class
+        self.assertEqual(self._bash("Approved", "rm -rf .zaude")[0], "deny")
+        # NOT waivable — even a waiver can't unlock a direct .zaude write
+        self.assertEqual(self._bash("Approved", "echo x >> .zaude/state.json",
+                                    waived=["protect_zaude_bash", "protect-zaude-bash"])[0], "deny")
+
+    def test_bash_read_of_zaude_and_launcher_allowed(self):
+        self.assertEqual(self._bash("Approved", "cat .zaude/state.json")[0], "allow")      # read
+        self.assertEqual(self._bash("Approved", "grep init .zaude/trace.jsonl")[0], "allow")
+        # the kernel's own CLI legitimately writes .zaude and must NEVER be flagged
+        self.assertEqual(self._bash("Intake",
+                                    'python "$HOME/.zaude/bin/zaude.py" review --unresolved 0')[0],
+                         "allow")
+        # COPY-OUT reads (.zaude as SOURCE) must NOT be hard-denied by the non-waivable tripwire
+        # (codex review: read-capable verbs were dropped to avoid false denies)
+        self.assertEqual(self._bash("Approved", "cp .zaude/state.json /tmp/state.json")[0], "allow")
+        self.assertEqual(self._bash("Approved", "dd if=.zaude/state of=/tmp/state")[0], "allow")
+        self.assertEqual(self._bash("Approved", "cat .zaude/x > /tmp/out")[0], "allow")     # read->write elsewhere
+
+    def test_bash_source_write_gated_at_high_risk(self):
+        # T4 pre-approval: a Bash write to source is denied (shares the design-before-impl waiver)
+        d, _, g = self._bash("Intake", 'echo "x" > src/app.ts', risk="T4")
+        self.assertEqual((d, g), ("deny", "design_before_impl_bash"))
+        self.assertEqual(self._bash("Intake", "sed -i 's/a/b/' main.py", risk="T4")[0], "deny")
+        # one /waive design-before-impl covers BOTH the Edit and the Bash variant
+        self.assertEqual(self._bash("Intake", 'echo x > src/app.ts', risk="T4",
+                                    waived=["design-before-impl"])[0], "allow-waived")
+
+    def test_bash_source_write_light_by_default(self):
+        # low/unclassified risk codes freely; reads and non-source writes are never gated
+        self.assertEqual(self._bash("Intake", 'echo x > src/app.ts')[0], "allow")           # unclassified
+        self.assertEqual(self._bash("Intake", 'echo x > src/app.ts', risk="T1")[0], "allow")
+        self.assertEqual(self._bash("Approved", 'echo x > src/app.ts', risk="T4")[0], "allow")  # post-approval
+        self.assertEqual(self._bash("Intake", 'echo notes > TODO.txt', risk="T4")[0], "allow")  # non-source
+        self.assertEqual(self._bash("Intake", "cat src/app.ts", risk="T4")[0], "allow")         # read
+
 
 class FailOpenTests(TmpCase):
     def test_non_onboarded(self):
