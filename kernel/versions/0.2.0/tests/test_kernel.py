@@ -199,6 +199,125 @@ class FailOpenTests(TmpCase):
         self.assertIsNone(paths.find_project(os.path.join(child, "src")))
 
 
+class FailClosedMarkerTests(TmpCase):
+    """A PRESENT-but-corrupt .zaude/project.json must fail CLOSED in the hook (codex fail-open #1):
+    silently losing enforcement because one file got garbled is the gap this closes. Parseable
+    markers (clone with a foreign root, other tools, schema drift) stay fail-OPEN."""
+
+    def _garble(self, root, content):
+        zd = os.path.join(root, ".zaude")
+        os.makedirs(zd, exist_ok=True)
+        with open(os.path.join(zd, "project.json"), "w", encoding="utf-8") as f:
+            f.write(content)
+        return zd
+
+    def _hook(self, cwd, disabled=False):
+        env = dict(os.environ)
+        env.pop("ZAUDE_DISABLE", None)
+        if disabled:
+            env["ZAUDE_DISABLE"] = "1"
+        p = subprocess.run([sys.executable, os.path.join(VROOT, "zhook.py"), "pre_tool_use"],
+                           input=json.dumps({"cwd": cwd, "tool_name": "Edit",
+                                             "tool_input": {"file_path": os.path.join(cwd, "src", "a.ts")}}).encode(),
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        return p.returncode, p.stdout.decode().strip()
+
+    # ---- the tri-state loader (single read; no TOCTOU) ----
+    def test_load_marker_valid(self):
+        write_project(self.tmp, "enforce")
+        self.assertIsInstance(paths._load_marker(self.root), dict)
+
+    def test_load_marker_absent_is_none(self):
+        self.assertIsNone(paths._load_marker(self.root))                 # no .zaude at all
+
+    def test_load_marker_garbled_is_broken(self):
+        self._garble(self.tmp, "{not json at all")
+        m = paths._load_marker(self.root)
+        self.assertIsInstance(m, paths._Broken)
+        self.assertEqual(m.reason, "badjson")
+
+    def test_load_marker_empty_is_broken(self):
+        self._garble(self.tmp, "   \n")
+        self.assertEqual(getattr(paths._load_marker(self.root), "reason", None), "empty")
+
+    def test_load_marker_directory_is_broken(self):
+        os.makedirs(os.path.join(self.tmp, ".zaude", "project.json"))    # a DIR where a file belongs
+        self.assertIsInstance(paths._load_marker(self.root), paths._Broken)
+
+    def test_load_marker_nan_is_broken(self):
+        # NaN/Infinity parse under default json but are NOT standard JSON -> garbled, fail closed.
+        self._garble(self.tmp, "NaN")
+        self.assertEqual(getattr(paths._load_marker(self.root), "reason", None), "badjson")
+
+    def test_load_marker_dangling_symlink_is_broken(self):
+        # a present-but-unusable marker (symlink to a missing target) must FAIL CLOSED, not open
+        # like a truly-absent marker. [codex review CRITICAL]
+        zd = os.path.join(self.tmp, ".zaude")
+        os.makedirs(zd, exist_ok=True)
+        link = os.path.join(zd, "project.json")
+        try:
+            os.symlink(os.path.join(self.tmp, "no_such_target.json"), link)
+        except (OSError, NotImplementedError, AttributeError):
+            self.skipTest("symlink unavailable / requires privilege")
+        self.assertIsInstance(paths._load_marker(self.root), paths._Broken)
+        self.assertEqual(paths.resolve(self.root)["status"], "broken")
+
+    def test_clone_with_foreign_root_is_fail_open(self):
+        # a fresh `git clone` carries the original machine's absolute project_root -> parses but
+        # does not claim this dir -> NONE (fail open), never broken.
+        write_project(self.tmp, "enforce", project_root="/some/other/machine/path")
+        self.assertIsNone(paths._load_marker(self.root))
+        self.assertEqual(paths.resolve(self.root)["status"], "none")
+
+    def test_foreign_tool_marker_is_fail_open(self):
+        self._garble(self.tmp, json.dumps({"some_other_tool": True}))    # valid JSON, not ours
+        self.assertIsNone(paths._load_marker(self.root))
+
+    # ---- resolve() tri-state + walk semantics ----
+    def test_resolve_broken(self):
+        self._garble(self.tmp, "{bad")
+        r = paths.resolve(self.root)
+        self.assertEqual(r["status"], "broken")
+        self.assertEqual(paths._real(r["broken_root"]), self.root)
+
+    def test_resolve_stops_at_broken_child_not_parent(self):
+        # parent is a VALID onboarded project; a child with a CORRUPT marker must NOT silently
+        # bind to the parent's .zaude — resolve stops at the broken child.
+        write_project(self.tmp, "enforce")
+        child = os.path.join(self.tmp, "sub")
+        self._garble(child, "{garbled")
+        self.assertEqual(paths.resolve(child)["status"], "broken")
+        self.assertIsNone(paths.find_project(child))                     # CLI back-compat: not-onboarded
+
+    def test_find_project_backcompat_broken_is_none(self):
+        self._garble(self.tmp, "{bad")
+        self.assertIsNone(paths.find_project(self.root))                 # CLI sees broken as not-onboarded
+
+    # ---- the hook actually fails closed ----
+    def test_hook_denies_on_broken_marker(self):
+        self._garble(self.tmp, "{corrupt")
+        rc, out = self._hook(self.tmp)
+        self.assertEqual(json.loads(out)["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_hook_kill_switch_escapes_broken_marker(self):
+        self._garble(self.tmp, "{corrupt")
+        self.assertEqual(self._hook(self.tmp, disabled=True), (0, ""))   # ZAUDE_DISABLE=1 bypass
+
+    def test_hook_allows_foreign_marker(self):
+        self._garble(self.tmp, json.dumps({"some_other_tool": True}))    # parses, not ours -> open
+        self.assertEqual(self._hook(self.tmp), (0, ""))
+
+    # ---- the preflight audit CLI ----
+    def test_scan_markers_reports_broken(self):
+        self._garble(os.path.join(self.tmp, "proj_a"), "{bad")
+        write_project(os.path.join(self.tmp, "proj_b"), "shadow")
+        p = subprocess.run([sys.executable, os.path.join(VROOT, "cli.py"), "scan-markers", self.tmp],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.assertEqual(p.returncode, 1)                               # at least one BROKEN -> rc 1
+        self.assertIn("BROKEN", p.stdout)
+        self.assertIn("ok", p.stdout)
+
+
 class SelfHostingTests(TmpCase):
     """Zaude must let you use Zaude to develop Zaude (enhance it, build vNext). Source — INCLUDING
     Zaude's own kernel source — is normal lifecycle-gated source, never the never-waivable
