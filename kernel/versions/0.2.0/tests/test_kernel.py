@@ -1243,3 +1243,93 @@ class VaultProjectionTests(TmpCase):
     def test_vault_sync_missing_vault_dir_fails_cleanly(self):
         self.assertEqual(self._cli("init", "--text", "x", "--mode", "enforce").returncode, 0)
         self.assertEqual(self._cli("vault-sync").returncode, 4)   # no vault/<slug> -> clean refusal
+
+
+class OpenCodeGracefulTests(TmpCase):
+    """OpenCode is the THIRD best-effort review seat — same graceful contract as codex: never gates,
+    never raises, independent retry state. Mirrors CodexGracefulTests on the seat dict (the gate
+    invariant is what matters, not stderr text)."""
+    import argparse as _ap
+
+    def _cli(self, *a):
+        return subprocess.run([sys.executable, os.path.join(VROOT, "cli.py"), "--path", self.tmp]
+                              + list(a), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def _seat(self, tier, **kw):
+        import cli
+        zd = os.path.join(self.tmp, ".zaude"); os.makedirs(zd, exist_ok=True)
+        args = self._ap.Namespace(opencode=kw.get("opencode", "auto"),
+                                  opencode_verdict=kw.get("opencode_verdict"),
+                                  opencode_summary=kw.get("opencode_summary", ""),
+                                  opencode_error=kw.get("opencode_error"),
+                                  opencode_retry_at=kw.get("opencode_retry_at"))
+        if "probe" in kw:
+            import lib.opencode as oc
+            orig = oc.probe; oc.probe = lambda *a, **k: kw["probe"]
+            try:
+                return cli._opencode_review_seat(zd, args, tier)
+            finally:
+                oc.probe = orig
+        return cli._opencode_review_seat(zd, args, tier)
+
+    def test_low_risk_skips(self):
+        self.assertEqual(self._seat("T1")["reason"], "low_risk")
+
+    def test_verdict_recorded_used_and_enforced(self):
+        s = self._seat("T4", opencode_verdict="concerns", opencode_summary="diverse take")
+        self.assertEqual((s["outcome"], s["verdict"]), ("used", "concerns"))
+        self.assertTrue(s["enforced"])
+
+    def test_off_overrides_verdict(self):
+        s = self._seat("T4", opencode="off", opencode_verdict="pass")
+        self.assertEqual((s["outcome"], s["reason"]), ("skipped", "off"))
+        self.assertFalse(s["enforced"])
+
+    def test_missing_records_unavailable_not_gate(self):
+        s = self._seat("T4", probe={"status": "missing", "version": None, "detail": "no opencode"})
+        self.assertEqual((s["outcome"], s["reason"]), ("unavailable", "missing"))
+        self.assertFalse(s["enforced"])
+
+    def test_present_noauth_records_unavailable(self):
+        s = self._seat("T3", probe={"status": "present_noauth", "version": "1", "detail": "no auth"})
+        self.assertEqual((s["outcome"], s["reason"]), ("unavailable", "present_noauth"))
+
+    def test_ready_no_verdict_is_nudge(self):
+        s = self._seat("T4", probe={"status": "ready", "version": "1", "detail": "ok"})
+        self.assertEqual((s["outcome"], s["reason"]), ("skipped", "available_not_run"))
+        self.assertFalse(s["enforced"])
+
+    def test_no_credit_via_error_arms_independent_backoff(self):
+        import lib.opencode as oc, lib.codex as cx
+        zd = os.path.join(self.tmp, ".zaude"); os.makedirs(zd, exist_ok=True)
+        s = self._seat("T4", opencode_error="429 rate limit", opencode_retry_at="9999999999")
+        self.assertEqual(s["outcome"], "no_credit")
+        self.assertFalse(oc.due_now(oc.read_status(zd)))      # opencode in backoff
+        self.assertTrue(cx.due_now(cx.read_status(zd)))       # codex UNAFFECTED (independent state)
+
+    def test_probe_never_raises(self):
+        import lib.opencode as oc
+        self.assertIn(oc.probe().get("status"), (oc.MISSING, oc.PRESENT_NOAUTH, oc.READY))
+
+    def test_review_ledger_carries_both_seats_and_opencode_never_gates(self):
+        # full chain to Reviewed at T4 with opencode absent on this box -> /review still commits (0),
+        # the ledger records BOTH seats, and unresolved_critical_high is untouched by either seat.
+        for cmd in (["init", "--text", "x", "--mode", "enforce"],
+                    ["clarify", "--acceptance", "a"], ["prioritize", "--decision", "d"],
+                    ["plan", "--steps", "a"], ["design", "--approach", "x", "--decision", "D"],
+                    ["classify-risk", "--tier", "T4"], ["approve", "--by", "op"], ["implement"],
+                    ["test", "--cmd", "pytest", "--exit", "0"]):
+            self.assertEqual(self._cli(*cmd).returncode, 0, cmd)
+        r = self._cli("review", "--unresolved", "0")
+        self.assertEqual(r.returncode, 0, r.stderr)           # opencode absent NEVER fails /review
+        led = json.load(open(os.path.join(self.tmp, ".zaude", "artifacts", "review-ledger.json"),
+                             encoding="utf-8"))
+        self.assertIn("codex", led["review_seats"])
+        self.assertIn("opencode", led["review_seats"])        # the third seat is recorded
+        self.assertEqual(led["unresolved_critical_high"], 0)  # no seat mutated the gate input
+
+    def test_opencode_status_command_exits_0(self):
+        self._cli("init", "--text", "x", "--mode", "enforce")
+        r = self._cli("opencode", "--json")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("status", json.loads(r.stdout))
