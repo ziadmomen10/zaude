@@ -767,6 +767,36 @@ class AgentPresenceTests(TmpCase):
             pol = json.load(f)
         self.assertEqual(ag.REQUIRED_AGENTS, pol["dispatch"]["required_agents"])
 
+    def test_catalog_covers_every_required_agent(self):
+        # the researched source catalog must map EVERY required role, so `zaude agents` can always
+        # point a missing one at a vetted source. [agent refresh]
+        import lib.agents as ag
+        for name in ag.REQUIRED_AGENTS:
+            self.assertIn(name, ag.CATALOG, name)
+
+    def test_guidance_is_actionable(self):
+        import lib.agents as ag
+        g = ag.guidance(["architect-review", "totally-unknown-agent"])
+        names = {n: (role, src, slug) for (n, role, src, slug) in g}
+        self.assertEqual(names["architect-review"][2], "architect-reviewer")   # upstream slug
+        self.assertTrue(names["architect-review"][1])                          # has a source repo
+        self.assertIn("totally-unknown-agent", names)                          # unknowns still listed
+
+    def test_sources_ranked_primary_spans_codex(self):
+        import lib.agents as ag
+        self.assertGreaterEqual(len(ag.SOURCES), 2)
+        self.assertTrue(ag.SOURCES[0][3])                 # top-ranked source supports Codex (cx flag)
+        self.assertIn("/", ag.PRIMARY_SOURCE)             # an owner/repo
+
+    def test_agents_json_carries_sources(self):
+        # `sources` is ALWAYS emitted (machine-independent). `guidance` is keyed on what's missing,
+        # which varies by machine (the dev box already has the agents), so it's unit-tested above.
+        self._cli("init", "--text", "x", "--mode", "enforce")
+        out = json.loads(self._cli("agents", "--json").stdout)
+        self.assertTrue(out["sources"])
+        self.assertTrue(out["sources"][0]["codex"])       # top source spans Codex
+        self.assertIn("guidance", out)                    # key present (may be [] if nothing missing)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

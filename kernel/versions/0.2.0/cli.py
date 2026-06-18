@@ -1360,15 +1360,33 @@ def cmd_agents(args):
     zd, root = _resolve(args)
     ag = agents.check(root)
     if getattr(args, "as_json", False):
+        ag = dict(ag,
+                  guidance=[{"name": n, "role": r, "source": s, "slug": g}
+                            for (n, r, s, g) in agents.guidance(ag["missing"])],
+                  sources=[{"key": k, "repo": repo, "why": why, "codex": cx, "caveat": cav}
+                           for (k, repo, why, cx, cav) in agents.SOURCES])
         print(json.dumps(ag))
         return 0
     print("required agents: %d (%d total installed)" % (len(ag["required"]), ag["installed_total"]))
     print("  present: %s" % (", ".join(ag["present"]) or "(none)"))
     print("  MISSING: %s" % (", ".join(ag["missing"]) or "(none)"))
     if ag["missing"]:
-        print("hint: install missing agents as ~/.claude/agents/<name>.md (or "
-              "<project>/.claude/agents/). Zaude generates only its own capability agents; the "
-              "review/build agents are installed separately.")
+        print("\nwhere to get the missing ones (market-scanned, ranked; verify the prompt + pin a "
+              "commit before trusting — Zaude never auto-installs):")
+        for name, role, source, slug in agents.guidance(ag["missing"]):
+            extra = ("" if slug == name else "  [upstream slug: %s]" % slug)
+            print("  - %-22s %s  <- %s%s" % (name, role, source, extra))
+        print("\n  sources, ranked by tradeoff:")
+        for k, repo, why, cx, caveat in agents.SOURCES:
+            print("   %d. %-42s %s\n      strength: %s\n      caveat:   %s"
+                  % (agents.SOURCES.index((k, repo, why, cx, caveat)) + 1, repo,
+                     "(Claude+Codex)" if cx else "(Claude only)", why, caveat))
+        print("\n  install (top source): Claude Code: %s" % agents.INSTALL_CMDS["claude"])
+        print("                        Codex CLI:   %s" % agents.INSTALL_CMDS["codex"])
+        print("  place each as ~/.claude/agents/<name>.md (or <project>/.claude/agents/).")
+        print("  note: the review panel runs Claude lenses (Opus 4.8, #1 SWE-bench Pro) and pairs "
+              "them with BEST-EFFORT Codex (GPT-5.5, #1 Terminal-Bench) when available — the "
+              "benchmark-best harness combo of 2026.")
     return 0
 
 
