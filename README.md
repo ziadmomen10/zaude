@@ -32,7 +32,7 @@ Claude Code is capable. Use it on a real project for a few weeks and you hit thr
 
 Zaude 1 closed those holes with hooks, slash commands, and vault conventions — the rule was **hooks enforce, skills suggest. If it matters, it's in a hook.** It worked. But a slash command can still be skipped: say "just ship it" and the review never runs.
 
-**Zaude 2.0 finishes the thought.** The whole workflow becomes a deterministic **kernel** that gates Claude Code's *tools*, not its prompts. The LLM can ask for a tool; a Python `PreToolUse` hook decides whether it's allowed based on where the work actually is in its lifecycle. "Just ship it" stops being a bad habit and becomes **structurally impossible** — the deploy tool won't run until review + verification produced a release token, and that's checked in code, not vibes.
+**Zaude 2.0 finishes the thought.** The whole workflow becomes a deterministic **kernel** that gates Claude Code's *tools*, not its prompts. The LLM can ask for a tool; a Python `PreToolUse` hook decides whether it's allowed based on where the work actually is in its lifecycle. "Just ship it" stops being a casual habit: you can't reach a release token without walking the signed review→verify chain, and the deploy tool path is gated on that token. (The deploy check is an honest **tripwire** for the common deploy commands, not an un-escapable sandbox — the real boundary is the state machine; see the [threat model](./docs/18-threat-model.md) for exactly what is and isn't defended.)
 
 ---
 
@@ -42,7 +42,7 @@ Zaude 1 closed those holes with hooks, slash commands, and vault conventions —
 |---|---|---|
 | Enforcement | A few hooks (frozen-guard, vault-sync, freshness) | A **workflow state machine** + risk-scaled gates over every tool call |
 | Source of truth | Vault markdown + session logs | **Tamper-evident `trace.jsonl`** (hash-chain + HMAC); `state.json` is a rebuildable projection |
-| "Done" | Convention | An **evidence gate** — can't reach Released without passing tests + verification |
+| "Done" | Convention | An **evidence gate** — can't reach Released without a recorded test exit code + a verification record (driver-**attested**, cross-checked by the `evidence-verifier` agent; the kernel can't run your tests for you) |
 | Small work | Same ceremony as big work | A **risk-tier fast lane** — trivial work flows; only T3/T4 gets the full lifecycle |
 | Backlog | In your head / a doc | A **GitHub Projects v2 board** (Intake → promote → ship), synced to trace + vault + memory |
 | Config | Hand-maintained files | One **`policy.json`** that *generates* the slash commands, agents, and the hook |
@@ -159,8 +159,8 @@ One append-only, signed trace is the source of truth; everything else (state, th
 |---|---|---|---|---|
 | Cross-session memory | None | Manual | Mechanical | **Mechanical + signed** |
 | Append-only decision log | No | Manual | Yes | **Tamper-evident trace** |
-| Review gate before commit | No | Manual | Enforced (skippable cmd) | **Tool-gated; un-skippable** |
-| "Done" requires evidence | No | No | No | **Yes (evidence gate)** |
+| Review gate before commit | No | Manual | Enforced (skippable cmd) | **Tool-gated; skippable only via a logged `/zwaive`** |
+| "Done" requires evidence | No | No | No | **Yes — driver-attested + agent-checked** |
 | Risk-scaled (small work flows) | n/a | n/a | No | **Yes (fast lane)** |
 | GitHub Projects backlog | No | No | No | **Yes (synced both ways)** |
 | Portable install + update | Manual | Manual | install.sh | **kernel + `zaude update`** |
