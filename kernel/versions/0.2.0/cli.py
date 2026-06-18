@@ -12,7 +12,7 @@ import subprocess
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib import (paths, trace, state as st, pm, onboard, gates, codex, agents,  # noqa: E402
-                 persona, router)
+                 persona, router, memory)
 
 
 def _kernel_version():
@@ -1162,6 +1162,38 @@ def cmd_persona(args):
     return 0
 
 
+def cmd_remember(args):
+    """COLLECTIVE MEMORY — append a lesson/fact/decision (redacted, operator-private). Exit 0."""
+    zd, root = _resolve(args)
+    tags = [t.strip() for t in (getattr(args, "tags", "") or "").split(",") if t.strip()]
+    r = memory.remember(zd, args.text, tags=tags, source="operator")
+    if r["text"].strip():
+        print("remembered: %s%s" % (r["text"][:80], "…" if len(r["text"]) > 80 else ""))
+    else:
+        print("remember: empty — nothing stored")
+    return 0
+
+
+def cmd_recall(args):
+    """COLLECTIVE MEMORY — retrieve the most relevant entries for a query (TF-IDF). Read-only. Exit 0."""
+    zd, root = _resolve(args)
+    try:
+        k = max(1, int(getattr(args, "k", 5) or 5))
+    except Exception:
+        k = 5
+    hits = memory.recall(zd, args.query, k=k)
+    if getattr(args, "as_json", False):
+        print(json.dumps(hits))
+        return 0
+    if not hits:
+        print("recall: nothing relevant (%d entries stored)." % memory.count(zd))
+        return 0
+    for h in hits:
+        tg = ("  [%s]" % ",".join(h["tags"])) if h.get("tags") else ""
+        print("- (%.3f) %s%s" % (h["score"], h["text"][:120], tg))
+    return 0
+
+
 def cmd_route(args):
     """INTENT DETECTION — given a natural-language request, return the best-matching Zaude command
     + a safety mode (auto/propose/confirm/ambiguous). Read-only: it SUGGESTS; the routed command
@@ -1440,6 +1472,12 @@ def main(argv=None):
 
     sp = sub.add_parser("route"); sp.add_argument("text")
     sp.add_argument("--json", dest="as_json", action="store_true"); sp.set_defaults(fn=cmd_route)
+
+    sp = sub.add_parser("remember"); sp.add_argument("text"); sp.add_argument("--tags", default="")
+    sp.set_defaults(fn=cmd_remember)
+
+    sp = sub.add_parser("recall"); sp.add_argument("query"); sp.add_argument("--k", default="5")
+    sp.add_argument("--json", dest="as_json", action="store_true"); sp.set_defaults(fn=cmd_recall)
 
     sp = sub.add_parser("codex"); sp.add_argument("--probe", action="store_true")
     sp.add_argument("--json", dest="as_json", action="store_true"); sp.set_defaults(fn=cmd_codex)

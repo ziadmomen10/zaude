@@ -939,3 +939,84 @@ class PersonaTests(TmpCase):
         bs = pp.beliefs(zd)
         self.assertTrue(bs); self.assertNotEqual(bs[0]["id"], secret_id)
         self.assertRegex(bs[0]["id"], r"^B\d+$")
+
+
+class CollectiveMemoryTests(TmpCase):
+    """Collective-memory recall — hardened from the start (redact, bounded, robust, private)."""
+    def _cli(self, *a):
+        return subprocess.run([sys.executable, os.path.join(VROOT, "cli.py"), "--path", self.tmp]
+                              + list(a), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def _zd(self):
+        zd = os.path.join(self.tmp, ".zaude"); os.makedirs(zd, exist_ok=True); return zd
+
+    def test_recall_ranks_relevant_first(self):
+        import lib.memory as m
+        zd = self._zd()
+        m.remember(zd, "always run codex in the review chain before shipping", tags=["review"])
+        m.remember(zd, "the deploy proxy uses the X-Proxy-Pass header", tags=["infra"])
+        m.remember(zd, "prefer scannable bullet points in reports")
+        hits = m.recall(zd, "how do we do code review with codex", k=3)
+        self.assertTrue(hits)
+        self.assertIn("codex", hits[0]["text"])
+
+    def test_recall_empty_when_no_match(self):
+        import lib.memory as m
+        zd = self._zd()
+        m.remember(zd, "infrastructure note about nginx")
+        self.assertEqual(m.recall(zd, "quantum chromodynamics"), [])
+
+    def test_secret_redacted_on_store_and_load(self):
+        import lib.memory as m
+        zd = self._zd()
+        tok = "ghp_" + "B" * 36
+        m.remember(zd, "the token is " + tok + " keep it safe")
+        blob = open(os.path.join(zd, "memory", "entries.jsonl"), encoding="utf-8").read()
+        self.assertNotIn(tok, blob); self.assertIn("redacted", blob)
+        # also redacted on load even if a raw token was injected into the file
+        with open(os.path.join(zd, "memory", "entries.jsonl"), "a", encoding="utf-8") as f:
+            f.write('{"text":"leak ' + tok + '","tags":[],"ts":1.0}\n')
+        for e in m._load(zd):
+            self.assertNotIn(tok, e["text"])
+
+    def test_corrupt_line_skipped_never_raises(self):
+        import lib.memory as m
+        zd = self._zd(); os.makedirs(os.path.join(zd, "memory"), exist_ok=True)
+        with open(os.path.join(zd, "memory", "entries.jsonl"), "w", encoding="utf-8") as f:
+            f.write("not json\n{\"text\":\"good one about pytest\",\"ts\":1.0}\n{\"nope\":1}\n")
+        self.assertIsInstance(m.recall(zd, "pytest"), list)
+        self.assertTrue(any("pytest" in h["text"] for h in m.recall(zd, "pytest")))
+
+    def test_never_raises_on_garbage(self):
+        import lib.memory as m
+        zd = self._zd()
+        for t in (None, "", "x" * 9000):
+            m.remember(zd, t)
+        self.assertIsInstance(m.recall(zd, None), list)
+        self.assertIsInstance(m.recall(zd, "x"), list)
+
+    def test_remember_recall_commands_exit_0(self):
+        self._cli("init", "--text", "x", "--mode", "enforce")
+        self.assertEqual(self._cli("remember", "lesson: never overwrite prod user data",
+                                   "--tags", "prod,safety").returncode, 0)
+        r = self._cli("recall", "prod user data", "--json")
+        self.assertEqual(r.returncode, 0)
+        self.assertTrue(any("overwrite" in h["text"] for h in json.loads(r.stdout)))
+
+    def test_recall_k_zero_returns_empty(self):
+        import lib.memory as m
+        zd = self._zd(); m.remember(zd, "something about pytest and coverage")
+        self.assertEqual(m.recall(zd, "pytest", k=0), [])
+        self.assertEqual(len(m.recall(zd, "pytest", k=1)), 1)
+
+    def test_load_is_byte_bounded_on_oversized_file(self):
+        import lib.memory as m
+        zd = self._zd(); os.makedirs(os.path.join(zd, "memory"), exist_ok=True)
+        p = os.path.join(zd, "memory", "entries.jsonl")
+        # write well over the tail budget; load must stay bounded + still recall
+        with open(p, "w", encoding="utf-8") as f:
+            for i in range(20000):
+                f.write('{"text":"entry number %d about widgets","tags":[],"ts":%d.0}\n' % (i, i))
+        ents = m._load(zd)
+        self.assertLessEqual(len(ents), m.MAX_ENTRIES)        # never the full 20000
+        self.assertIsInstance(m.recall(zd, "widgets", k=3), list)
