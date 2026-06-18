@@ -70,7 +70,9 @@ ROUTES = {
     "pm-sync":     {"safety": PROPOSE, "triggers": ["sync the board", "push to github", "update the board"]},
     "pm-init":     {"safety": PROPOSE, "triggers": ["set up the board", "create the github project"]},
     "pm-mirror":   {"safety": PROPOSE, "triggers": ["mirror the board", "backlog to vault"]},
-    "vault-push":  {"safety": PROPOSE, "triggers": ["push the vault", "sync the vault", "back up the vault"]},
+    "vault-sync":  {"safety": PROPOSE, "triggers": ["update the vault", "refresh current state",
+                                                    "project the trace to the vault", "update decisions"]},
+    "vault-push":  {"safety": PROPOSE, "triggers": ["push the vault", "back up the vault"]},
     "runner":      {"safety": PROPOSE, "triggers": ["ci", "github actions", "set up a runner", "pipeline"]},
 
     # ---- destructive / irreversible-ish (CONFIRM) ----

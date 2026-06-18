@@ -42,6 +42,7 @@
     {"name": "route",        "cli": "route",         "group": "control",   "summary": "INTENT DETECTION: map a natural-language request to the right command + a safety mode (auto/propose/confirm)."},
     {"name": "remember",     "cli": "remember",      "group": "control",   "summary": "Collective memory: append a lesson/fact/decision (redacted, operator-private)."},
     {"name": "recall",       "cli": "recall",        "group": "control",   "summary": "Collective memory: retrieve the most relevant entries for a query (TF-IDF)."},
+    {"name": "vault-sync",   "cli": "vault-sync",    "group": "control",   "summary": "Project the signed trace into the vault: regenerate current-state.md (trace-anchored) + append-only decisions.md. Idempotent."},
     {"name": "vault-push",   "cli": "vault-push",    "group": "control",   "summary": "Sync the project vault to a shared GitHub repo (own git repo under vault/; best-effort)."},
     {"name": "runner",       "cli": "runner",        "group": "control",   "summary": "Emit CI workflow + (self-hosted) a VPS runner-install script. --mode github|self-hosted."},
     {"name": "intake",       "cli": "pm-add",        "group": "pm",        "summary": "Drop a rough idea into your Intake column."},

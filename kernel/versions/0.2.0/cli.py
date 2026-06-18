@@ -12,7 +12,7 @@ import subprocess
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib import (paths, trace, state as st, pm, onboard, gates, codex, agents,  # noqa: E402
-                 persona, router, memory)
+                 persona, router, memory, vault)
 
 
 def _kernel_version():
@@ -120,16 +120,18 @@ def cmd_init(args):
         "enforcement_mode": args.mode})
     _write_artifact(zd, "request.json", {"id": "REQ-INTAKE", "text": args.text, "source": "operator"})
     if not trace.read_trace(zd, root, verify=False):
-        trace.append_row(zd, {"kind": "init", "root": root, "mode": args.mode}, root)
+        trace.append_row(zd, {"kind": "init", "root": root, "mode": args.mode,
+                              "intake_text": args.text}, root)
     _refresh_state(zd, root)
     print("initialized %s (mode=%s)" % (zd, args.mode))
     return 0
 
 
-def _simple(frm, to, command, artifact, build_obj):
+def _simple(frm, to, command, artifact, build_obj, extra_rows_fn=None):
     def fn(args):
         zd, root = _resolve(args)
-        return _commit(zd, root, frm, to, command, artifact, build_obj(args))
+        return _commit(zd, root, frm, to, command, artifact, build_obj(args),
+                       extra_rows=(extra_rows_fn(args) if extra_rows_fn else None))
     return fn
 
 
@@ -370,7 +372,8 @@ def cmd_onboard(args):
             "enforcement_mode": args.mode, "slug": args.slug})
         _write_artifact(zd, "request.json", {"id": "REQ-INTAKE", "text": args.text, "source": "operator"})
         if not trace.read_trace(zd, root, verify=False):
-            trace.append_row(zd, {"kind": "init", "root": root, "mode": args.mode}, root)
+            trace.append_row(zd, {"kind": "init", "root": root, "mode": args.mode,
+                              "intake_text": args.text}, root)
         _refresh_state(zd, root)
     vd, created = onboard.scaffold_vault(root, args.slug, args.stack, args.text)
     gited = onboard.git_init(root)
@@ -984,6 +987,40 @@ def _redact_url(u):
         return "<remote>"
 
 
+def cmd_vault_sync(args):
+    """Project the SIGNED TRACE into the human-readable vault: REGENERATE current-state.md (a
+    snapshot stamped with a trace anchor) and APPEND trace-anchored, idempotent entries to
+    decisions.md. The trace stays the source of truth; the vault is a derived projection. Reads
+    the trace with verify=True, so a forged/corrupt trace fails closed here too. [vault upgrade]"""
+    zd, root = _resolve(args)
+    slug = _slug(zd) or os.path.basename(root)
+    vd = os.path.join(root, "vault", slug)
+    if not os.path.isdir(vd):
+        sys.stderr.write("vault-sync: no vault/%s — run `zaude onboard` first\n" % slug)
+        return 4
+    # Hold the project lock so read-trace + the read-anchors/append on decisions.md is race-free
+    # against a concurrent vault-sync or a trace-mutating command. [codex review HIGH]
+    lp = trace.acquire_lock(zd)
+    try:
+        try:
+            rows = trace.read_trace(zd, root, verify=True)   # verify=True -> forged trace fails closed
+            proj = st.reduce(rows)
+        except (trace.TraceCorrupt, trace.TraceForged, st.StateForged) as e:
+            sys.stderr.write("vault-sync: refusing — trace integrity check failed (%s). "
+                             "`zaude repair`/recover first; the vault is NOT updated.\n" % e)
+            return 1
+        head = trace._row_hash(rows[-1])[:12] if rows else trace.GENESIS
+        res = vault.sync(vd, slug, rows, proj, _NEXT_COMMAND.get(proj.get("current_state")), head)
+    finally:
+        trace.release_lock(lp)
+    for e in res["errors"]:
+        sys.stderr.write("vault-sync: %s\n" % e)
+    print("vault-sync: %s/current-state.md %s; %d decision(s) appended (trace anchor %s)"
+          % (os.path.relpath(vd, root),
+             "regenerated" if res["current_state_written"] else "FAILED", res["decisions_appended"], head))
+    return 0 if (res["current_state_written"] and not res["errors"]) else 1
+
+
 def cmd_vault_push(args):
     """#2 — sync the project vault to a SHARED GitHub repo. The vault gets its OWN git repo under
     vault/ (independent of the project code repo) so it can push to a dedicated vault remote, which
@@ -1379,7 +1416,9 @@ def main(argv=None):
 
     sp = sub.add_parser("prioritize"); sp.add_argument("--decision", required=True)
     sp.set_defaults(fn=_simple("Clarified", "Prioritized", "/prioritize", "priority.json",
-                    lambda a: {"decision": a.decision}))
+                    lambda a: {"decision": a.decision},
+                    extra_rows_fn=lambda a: [{"kind": "decision", "what": "priority",
+                                              "text": a.decision}]))
 
     sp = sub.add_parser("plan"); sp.add_argument("--steps", required=True)
     sp.set_defaults(fn=_simple("Prioritized", "Planned", "/plan", "plan.json",
@@ -1388,7 +1427,9 @@ def main(argv=None):
     sp = sub.add_parser("design"); sp.add_argument("--approach", required=True)
     sp.add_argument("--decision", required=True)
     sp.set_defaults(fn=_simple("Planned", "Designed", "/design", "design.json",
-                    lambda a: {"approach": a.approach, "decision_id": a.decision, "alternatives": []}))
+                    lambda a: {"approach": a.approach, "decision_id": a.decision, "alternatives": []},
+                    extra_rows_fn=lambda a: [{"kind": "decision", "what": "design",
+                                              "text": a.approach, "decision_id": a.decision}]))
 
     sp = sub.add_parser("classify-risk"); sp.add_argument("--tier", required=True)
     sp.set_defaults(fn=cmd_classify_risk)
@@ -1491,6 +1532,7 @@ def main(argv=None):
     sp = sub.add_parser("next"); sp.add_argument("--json", dest="as_json", action="store_true")
     sp.set_defaults(fn=cmd_next)
 
+    sub.add_parser("vault-sync").set_defaults(fn=cmd_vault_sync)
     sp = sub.add_parser("vault-push"); sp.add_argument("--remote", default=None)
     sp.set_defaults(fn=cmd_vault_push)
 
