@@ -14,7 +14,7 @@ import unittest
 
 VROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, VROOT)
-from lib import paths, trace, state as st, gates, keys as _keys  # noqa: E402
+from lib import paths, trace, state as st, gates, keys as _keys, vault  # noqa: E402
 
 # repo root (in CI) or ~/.zaude (locally) — so generator/dist tests don't depend on a real ~/.zaude
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(VROOT)))
@@ -1139,3 +1139,77 @@ class CollectiveMemoryTests(TmpCase):
         ents = m._load(zd)
         self.assertLessEqual(len(ents), m.MAX_ENTRIES)        # never the full 20000
         self.assertIsInstance(m.recall(zd, "widgets", k=3), list)
+
+
+class VaultProjectionTests(TmpCase):
+    """`zaude vault-sync` projects the SIGNED TRACE into the human-readable vault: current-state.md
+    regenerated (trace-anchored) + decisions.md append-only + idempotent. [vault upgrade]"""
+
+    def _cli(self, *a):
+        return subprocess.run([sys.executable, os.path.join(VROOT, "cli.py"), "--path", self.tmp]
+                              + list(a), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def _full_to_risk(self):
+        self.assertEqual(self._cli("onboard", "--slug", "demo", "--text", "build a thing").returncode, 0)
+        for cmd in (["clarify", "--acceptance", "works"],
+                    ["prioritize", "--decision", "ship security first"],
+                    ["plan", "--steps", "a,b"],
+                    ["design", "--approach", "tri-state resolver", "--decision", "D7"],
+                    ["classify-risk", "--tier", "T3"]):
+            self.assertEqual(self._cli(*cmd).returncode, 0, cmd)
+
+    def test_vault_sync_projects_state_and_decisions(self):
+        self._full_to_risk()
+        r = self._cli("vault-sync")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        cs = open(os.path.join(self.tmp, "vault", "demo", "current-state.md"), encoding="utf-8").read()
+        self.assertIn("RiskClassified", cs)          # current lifecycle state
+        self.assertIn("zaude-trace-anchor", cs)      # anchored to a trace point
+        self.assertIn("T3", cs)                      # risk tier surfaced
+        self.assertIn("build a thing", cs)           # in-flight request
+        dec = open(os.path.join(self.tmp, "vault", "demo", "decisions.md"), encoding="utf-8").read()
+        self.assertIn("[ZD-", dec)
+        self.assertIn("ship security first", dec)    # priority decision (permanent decision row)
+        self.assertIn("tri-state resolver", dec)     # design decision
+        self.assertIn("decision_id: D7", dec)
+        self.assertIn("tier=T3", dec)                # risk decision
+
+    def test_vault_sync_idempotent(self):
+        self._full_to_risk()
+        self._cli("vault-sync")
+        dp = os.path.join(self.tmp, "vault", "demo", "decisions.md")
+        dec1 = open(dp, encoding="utf-8").read()
+        r2 = self._cli("vault-sync")
+        self.assertIn("0 decision(s) appended", r2.stdout)   # nothing re-appended
+        self.assertEqual(dec1, open(dp, encoding="utf-8").read())   # append-only: no growth/dupes
+
+    def test_vault_unit_decisions_append_only_idempotent(self):
+        rows = [{"seq": 0, "kind": "init", "ts": 0},
+                {"seq": 1, "kind": "decision", "what": "design", "text": "X", "decision_id": "D1", "ts": 0},
+                {"seq": 2, "kind": "risk", "tier": "T4", "ts": 0},
+                {"seq": 3, "kind": "waiver", "gate": "g1", "ts": 0}]
+        p = os.path.join(self.tmp, "decisions.md")
+        self.assertEqual(vault.append_decisions(p, rows, 0)[0], 3)   # decision + risk + waiver
+        self.assertEqual(vault.append_decisions(p, rows, 0)[0], 0)   # idempotent: no re-append
+        self.assertEqual(open(p, encoding="utf-8").read().count("[ZD-"), 3)
+
+    def test_vault_decision_text_cannot_poison_anchors(self):
+        # a decision whose TEXT contains "[ZD-9]" must NOT make a future seq-9 row look already
+        # projected (anchor poisoning): brackets are neutralized AND anchors match only at line
+        # start, so the real seq-9 row still appends later. [codex review HIGH]
+        p = os.path.join(self.tmp, "decisions.md")
+        vault.append_decisions(p, [{"seq": 1, "kind": "decision", "what": "design",
+                                    "text": "mimic [ZD-9] here", "ts": 0}], 0)
+        self.assertNotIn("[ZD-9]", open(p, encoding="utf-8").read())   # user text can't mint it
+        added, _ = vault.append_decisions(p, [{"seq": 1, "kind": "decision", "text": "a", "ts": 0},
+                                              {"seq": 9, "kind": "risk", "tier": "T4", "ts": 0}], 0)
+        self.assertEqual(added, 1)                                     # only the real seq-9 appends
+
+    def test_vault_oneline_strips_injection(self):
+        out = vault._oneline("a\nb\r\n<!-- x --> [ZD-1]")
+        for bad in ("\n", "\r", "<!--", "-->", "[ZD-1]"):
+            self.assertNotIn(bad, out)
+
+    def test_vault_sync_missing_vault_dir_fails_cleanly(self):
+        self.assertEqual(self._cli("init", "--text", "x", "--mode", "enforce").returncode, 0)
+        self.assertEqual(self._cli("vault-sync").returncode, 4)   # no vault/<slug> -> clean refusal
