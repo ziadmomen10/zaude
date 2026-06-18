@@ -52,6 +52,20 @@ Zaude 2.0 keeps everything Zaude 1 stood for — persistent memory, durable work
 
 ---
 
+## The operator-learning layer
+
+Zaude is the layer **on top of Claude Code** that makes development easier with fewer errors and less effort — the "C++ on C" idea. Three capabilities turn the workflow engine into something that adapts to *you*:
+
+- **Intent routing — say what you want, not which command.** You don't memorize ~35 slash-commands. Describe the goal; `zaude route "<text>"` maps it to the right command plus a **safety mode**: read-only commands auto-run, mutating ones propose, **destructive ones always confirm** (structurally — a destructive command can never auto-run).
+- **Persona — decide *as the operator would*.** In autonomous mode Zaude loads a distilled, **confirmed** profile of how you decide (preferences, rules, risk posture), learned from your recorded decisions. It's *managed* memory: a belief is confirmed only after it's reinforced (repetition gates noise), confidence decays with staleness, and preference *drift* is flagged rather than silently overwritten. Operator-private, secret-redacted, never pushed. `zaude persona`.
+- **Collective memory — learn the lessons.** A searchable store of facts/lessons/decisions with deterministic recall (`zaude remember`, `zaude recall`). The signed trace stays the episodic source of truth; this is derived, retrievable context.
+
+Everything here is **advisory + bounded + private**: it informs autonomous judgment, never overrides an explicit instruction or a safety gate, and every persisted string is redacted in the kernel. Design + research: [`docs/16-operator-learning-layer.md`](./docs/16-operator-learning-layer.md).
+
+> Agents pair with the workflow. Zaude generates its own capability agents (evidence-verifier, supply-chain-auditor, ui-design-implementer) and `zaude agents` reports which **external** review/build agents are installed vs missing — install a multi-harness set such as [`wshobson/agents`](https://github.com/wshobson/agents) (spans Claude **and Codex**) so the review panel stays whole.
+
+---
+
 ## Quickstart
 
 **You need:** Claude Code, `git`, and Python 3.
@@ -160,6 +174,7 @@ Zaude 1's full user guide is in [`docs/`](./docs/) (chapters 01–14) and stays 
 | | Chapter | Topic |
 |---|---|---|
 | 15 | [The 2.0 engine](./docs/15-zaude-2-engine.md) | Kernel, state machine, trace, gates, fast lane, install/update |
+| 16 | [The operator-learning layer](./docs/16-operator-learning-layer.md) | Intent routing, persona, collective memory — research, design, privacy model |
 
 The original chapters (architecture, vault, commands, hooks, memory, agents, workflow, best practices) describe the conventions Zaude 2.0 builds on and still honors.
 
@@ -174,6 +189,10 @@ The original chapters (architecture, vault, commands, hooks, memory, agents, wor
 **Does the engine slow Claude down?** The hook runs only on file-mutating tools and targets <150 ms. Non-onboarded projects exit instantly.
 
 **Does Zaude call the Anthropic API?** No. It runs entirely inside Claude Code.
+
+**Where does the persona / collective memory live — is it pushed anywhere?** No. Both are operator-private under `.zaude/persona/` and `.zaude/memory/` (gitignored, `0700`/`0600`), every persisted string is secret-redacted in the kernel, and nothing in them is ever committed or synced. They inform autonomous judgment locally; they never leave the machine.
+
+**Does the persona ever override what I tell it to do?** No. It's advisory only — it informs *autonomous* decisions when you haven't said how. An explicit instruction and a safety gate always win.
 
 **Do I lose Zaude 1?** No. v1's hooks, commands, templates, and docs are all still here. v2 is the engine; you can run the v1 conventions alongside it.
 
