@@ -33,10 +33,15 @@ The kernel keeps a small set of load-bearing gates and lets everything else flow
 
 - **design-before-impl** — blocks source edits before design+approval **only for T3/T4** (auth,
   migrations, prod, security, destructive). Low/unclassified work codes freely.
-- **deploy-needs-release-token** — deploy/publish commands are blocked until `/zship` issues a
-  token (which it only does after a clean review + verification).
-- **protect-`.zaude`** — no tool may edit the kernel's own trace/state (never waivable).
-- **evidence** — `fast-ship` and `/zship` refuse if tests didn't pass.
+- **deploy-needs-release-token** — deploy/publish-shaped commands are blocked until `/zship` issues a
+  token (only after a clean review + verification). This is a **heuristic tripwire** for the common
+  deploy commands, not an un-escapable boundary — the real boundary is the state machine (you can't
+  reach a token without the chain). See the [threat model](./18-threat-model.md).
+- **protect-`.zaude`** — no tool may edit the kernel's own trace/state (never waivable); covers the
+  Edit-family tools and a Bash-write tripwire.
+- **evidence** — `fast-ship` and `/zship` refuse unless the **recorded** test exit code is 0. The
+  exit code is **driver-attested** (the kernel doesn't run your tests); the `evidence-verifier`
+  agent cross-checks that "done" claims are backed by real apply-evidence.
 
 Bypassing a gate requires an explicit, logged `/zwaive` (lifecycle-state protection excepted). The
 default project mode is **shadow** (logs would-deny, blocks nothing) until you promote to **enforce**.
@@ -54,9 +59,13 @@ your GitHub edits back (PM-wins for business fields; both-changed → recorded c
 writes `vault/<slug>/backlog.md` + the memory index. The PAT lives only in `~/.zaude/secrets`.
 
 ### Config-driven generator
-One `policy.json` is the canonical config. `zaude gen` renders the slash commands, the capability
-agents (`evidence-verifier`, `supply-chain-auditor`), and the `PreToolUse` hook block into a staging
-dir. `zaude install --yes` wires them into `~/.claude` under a `z` prefix (so they don't clobber
+One `policy.json` is the canonical config **for the generated surface** — `zaude gen` renders the
+slash commands, the capability agents (`evidence-verifier`, `supply-chain-auditor`), and the
+`PreToolUse` hook block into a staging dir. Note: the **runtime enforcement facts** (the gate set,
+the `HIGH_RISK={T3,T4}` tiers, the 14-state lifecycle) are **hardcoded in the stdlib kernel**, not
+loaded from `policy.json` at runtime — so the kernel runs even if `policy.json` is absent, and
+`policy.json` mirrors (rather than drives) those facts. Only `dispatch.required_agents` is
+drift-locked to the kernel by a test. `zaude install --yes` wires them into `~/.claude` under a `z` prefix (so they don't clobber
 your existing `/start`/`/ship`), snapshotting first; `zaude uninstall` reverses it from a manifest.
 
 ## Install, update, uninstall

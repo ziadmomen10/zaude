@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "note": "Canonical Zaude config. The generator (L6) renders slash-commands + agents + the hook block from this file. JSON (not YAML) so the stdlib-only kernel has zero deps. Edit here, then `zaude gen`.",
+  "note": "Canonical config for the GENERATED SURFACE only: the generator (L6) renders slash-commands + agents + the hook block from this file. The RUNTIME enforcement facts (the gate set, HIGH_RISK={T3,T4} tiers, the 14-state lifecycle) are HARDCODED in the stdlib kernel and are NOT loaded from here at runtime — so the kernel runs even if this file is absent, and this file mirrors rather than drives them. Only dispatch.required_agents is drift-locked to the kernel by a test. JSON (not YAML) so the kernel has zero deps. Edit here, then `zaude gen`.",
   "launcher": "$HOME/.zaude/bin/zaude.py",
   "hook_launcher": "$HOME/.zaude/bin/zhook.py",
 
