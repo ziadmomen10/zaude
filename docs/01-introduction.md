@@ -101,7 +101,7 @@ The six slash commands:
 
 ### Vault remembers
 
-The vault is a plain directory of markdown files, organized by project. It's the single source of truth for "what we know about this project". The `SessionStart` hook reads it at the start of every session; the `/ship` and `/wrap` commands write to it at the end.
+The vault is a plain directory of markdown files, organized by project. In **v1** it's the source of truth for "what we know about this project" — read by the `SessionStart` hook, written by `/ship` / `/wrap`. In **v2** the signed trace (`.zaude/trace.jsonl`) is the source of truth and the vault is a _generated projection_: regenerate it with `zaude vault-sync` (via `/zwrap`), and never hand-edit `current-state.md`.
 
 ```
 vault-root/

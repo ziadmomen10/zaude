@@ -1,5 +1,7 @@
 Report where we left off on the current project. Do NOT re-read the vault from disk — the `SessionStart` hook at `~/.claude/hooks/session-start-vault.py` has already injected the full vault context (CLAUDE.md, current-state.md, decisions.md + archives, open-questions.md, spec.md, architecture.md, last 3 session logs, cross-project patterns, and all memory files) before this skill runs.
 
+> **Zaude v2 check.** If this repo has a `.zaude/` directory, the injected v1 vault may be stale (in v2 the signed trace is the source of truth). Prefer **`/zstart`**, which reports the current state rebuilt from the trace, and treat the v1 `current-state.md` as informational only.
+
 ## If the hook didn't inject context
 
 Rare but possible: the cwd wasn't recognized as a known project, or the hook config is wrong. Symptom: the system reminder at session start does NOT contain `=== VAULT CONTEXT FOR <project> ===`.

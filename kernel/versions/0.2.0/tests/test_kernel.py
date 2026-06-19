@@ -128,6 +128,46 @@ class GateTests(TmpCase):
                            waived=["protect_zaude"])
         self.assertEqual(d, "deny")
 
+    def test_protect_vault_projection(self):
+        # the trace-projected vault files cannot be hand-edited (the #1 v1->v2 mismatch)
+        v = os.path.join(self.tmp, "vault", "myslug")
+        for base in ("current-state.md", "decisions.md"):
+            d, _, g = self._ev("Approved", "Write", {"file_path": os.path.join(v, base)})
+            self.assertEqual((d, g), ("deny", "protect_vault_projection"), base)
+        # other vault files are scaffolded-once / hand-maintained, NOT projections -> allowed
+        for base in ("spec.md", "CLAUDE.md", "open-questions.md"):
+            self.assertEqual(
+                self._ev("Approved", "Write", {"file_path": os.path.join(v, base)})[0], "allow", base)
+        # a current-state.md OUTSIDE this project's vault/ (e.g. the old vault) is not its projection
+        self.assertEqual(
+            self._ev("Approved", "Write",
+                     {"file_path": os.path.join(self.tmp, "docs", "current-state.md")})[0], "allow")
+
+    def test_protect_vault_projection_waivable(self):
+        v = os.path.join(self.tmp, "vault", "s")
+        d, _, _ = self._ev("Approved", "Write", {"file_path": os.path.join(v, "current-state.md")},
+                           waived=["protect-vault-projection"])
+        self.assertEqual(d, "allow-waived")
+
+    def test_protect_vault_projection_bypass_resistance(self):
+        v = os.path.join(self.tmp, "vault", "s")
+        # every mutating tool is gated (not just Write)
+        for tool in ("Edit", "MultiEdit", "NotebookEdit"):
+            key = "notebook_path" if tool == "NotebookEdit" else "file_path"
+            d, _, g = self._ev("Approved", tool, {key: os.path.join(v, "current-state.md")})
+            self.assertEqual((d, g), ("deny", "protect_vault_projection"), tool)
+        # filename-normalization tricks still resolve to the protected base
+        for trick in ("CURRENT-STATE.MD", "current-state.md.", "current-state.md "):
+            self.assertEqual(
+                self._ev("Approved", "Write", {"file_path": os.path.join(v, trick)})[0], "deny", trick)
+        # nested deeper under vault/ is still inside the boundary
+        self.assertEqual(
+            self._ev("Approved", "Write",
+                     {"file_path": os.path.join(v, "a", "b", "current-state.md")})[0], "deny")
+        # a non-mutating tool (Read) must NOT be gated — no over-fire
+        self.assertEqual(
+            self._ev("Approved", "Read", {"file_path": os.path.join(v, "current-state.md")})[0], "allow")
+
     def test_deploy_gate(self):
         d, _, g = self._ev("Approved", "Bash", {"command": "bash deploy.sh"})
         self.assertEqual(d, "deny"); self.assertEqual(g, "deploy_needs_release_token")
@@ -403,6 +443,34 @@ class GeneratorTests(TmpCase):
         for f in glob.glob(os.path.join(out, "**", "*"), recursive=True):
             if os.path.isfile(f):
                 self.assertNotIn("ghp_", open(f, encoding="utf-8").read())
+
+    def test_render_command_body_override(self):
+        # an orchestration command (e.g. /zwrap) carries a custom `body`, emitted VERBATIM (braces
+        # safe) with the description header + marker, and NOT the thin CLI-wrapper template.
+        from lib import generator
+        rich = generator.render_command(
+            {"name": "x", "cli": "status", "summary": "S", "body": "CUSTOM {body} <ok>"})
+        self.assertIn("CUSTOM {body} <ok>", rich)         # verbatim, no .format() on the body
+        self.assertIn("description: S", rich)
+        self.assertIn(generator.MARKER, rich)
+        self.assertNotIn("If unsure of the flags", rich)  # thin-template text must be absent
+        # a command WITHOUT a body still uses the thin CLI wrapper.
+        thin = generator.render_command({"name": "y", "cli": "status", "summary": "S"})
+        self.assertIn("If unsure of the flags", thin)
+        # a present-but-blank body must FAIL rather than silently render the thin wrapper.
+        with self.assertRaises(ValueError):
+            generator.render_command({"name": "z", "cli": "status", "summary": "S", "body": "   "})
+
+    def test_wrap_command_is_trace_anchored(self):
+        # the shipped /zwrap must drive the trace-anchored path (vault-sync) and must NOT hand-edit
+        # the projected current-state.md — the whole point of the v2 wrap.
+        from lib import generator
+        out = os.path.join(self.tmp, "gen")
+        generator.generate(out_dir=out, policy_path=_POLICY)
+        wrap = open(os.path.join(out, "commands", "wrap.md"), encoding="utf-8").read()
+        self.assertIn("vault-sync", wrap)
+        self.assertIn("source of truth", wrap)
+        self.assertNotIn("If unsure of the flags", wrap)  # proves the body override took effect
 
 
 class DistTests(TmpCase):

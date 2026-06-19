@@ -23,6 +23,8 @@ Eight commands at `~/.claude/commands/` are the primary interface. Don't reinven
 
 Manual prompting is fallback. If a command covers the workflow, use it.
 
+> **v2 precedence.** On a repo with a `.zaude/` directory (a Zaude v2 / signed-trace project), the `/z*` commands are authoritative and the **trace** — not the vault — is the source of truth. Use `/zstart`, `/zwrap`, `/zship`, `/zvault-sync` there; the v1 commands above (`/start`, `/wrap`, `/ship`) apply to non-`.zaude/` projects. Hand-editing `current-state.md` on a v2 repo is blocked by the kernel's `protect_vault_projection` gate.
+
 ---
 
 ## Intent routing — say what you want, don't memorize commands

@@ -1,5 +1,7 @@
 End-of-session wrap-up. Leaves both the project repo and the vault in a clean, documented state.
 
+> **Zaude v2 check — do this FIRST.** If this repo has a `.zaude/` directory (walk up from cwd), it is a **v2 project**: the signed trace is the source of truth and `current-state.md` is a generated projection. Do NOT run the v1 flow below or hand-edit the vault — use **`/zwrap`** instead (trace-anchored: vault-sync + lessons + credential scan). The kernel's `protect_vault_projection` gate will block a hand-edit anyway. The steps below apply only to a v1 (non-`.zaude/`) project.
+
 ## Steps
 
 1. **Run `code-reviewer`** one final time on any uncommitted changes in the current repo. Report findings. Do NOT fix anything — if CRITICAL or HIGH, stop and tell the user to decide.
