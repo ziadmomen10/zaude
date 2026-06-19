@@ -53,6 +53,15 @@ def _sha(text):
 
 
 def render_command(c):
+    # A command may carry a custom `body`: full markdown for an ORCHESTRATION command (e.g. /zwrap)
+    # that does more than wrap one CLI call. The body is emitted VERBATIM (no .format) so its prose
+    # can contain braces/placeholders safely. Commands without a body get the thin CLI wrapper.
+    if "body" in c:
+        body = c["body"]
+        if not body.strip():   # a half-deleted/blank body must FAIL, not silently fall through
+            raise ValueError("empty body for command %r in policy" % c.get("name"))
+        head = "---\ndescription: %s\n---\n" % c.get("summary", "")
+        return head + body.rstrip("\n") + "\n\n" + MARKER + "\n"
     return _CMD_TMPL.format(name=c["name"], cli=c["cli"], summary=c.get("summary", "")) + "\n" + MARKER + "\n"
 
 

@@ -31,3 +31,10 @@ node_modules/
 # Test / scratch directories
 /scratch/
 /tmp/
+
+# Zaude self-hosting pilot (local) — keep operational + operator-PRIVATE state out of the public
+# framework-source repo. .zaude/ holds the live trace/state + the gitignored persona/memory/codex/
+# opencode private side-files; vault/ is the project-local trace projection. Narrow this later if
+# you ever want to commit the signed audit trail.
+.zaude/
+vault/

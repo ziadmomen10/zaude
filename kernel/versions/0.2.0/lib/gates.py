@@ -112,6 +112,31 @@ def protect_zaude(ctx):
     return GateResult("allow")
 
 
+# The vault is a GENERATED projection of the signed trace: `zaude vault-sync` REGENERATES
+# current-state.md wholesale and APPENDS trace-anchored entries to decisions.md. Hand-editing them
+# is the #1 v1->v2 mismatch (architecture audit): a v1 command (or a person) writes prose into a file
+# the kernel owns, so it either silently diverges from the trace or is wiped on the next sync. This
+# gate is the BOUNDARY the audit asked for — one rule that neutralizes every "hand-edit the vault"
+# path at once, instead of editing each v1 command. Other vault files (spec.md, CLAUDE.md,
+# open-questions.md, sessions/) are scaffolded-once / hand-maintained and are NOT projections.
+_PROJECTION_BASES = ("current-state.md", "decisions.md")
+
+
+def protect_vault_projection(ctx):
+    """No tool may hand-edit the trace-projected vault files (vault/<slug>/current-state.md,
+    decisions.md). WAIVABLE — the projection is regenerable (unlike the .zaude/ trace). [audit]"""
+    if ctx.tool in MUTATING_TOOLS and _norm_base(ctx.target) in _PROJECTION_BASES:
+        vault_dir = os.path.join(os.path.dirname(ctx.zaude_dir), "vault")
+        if _under(ctx.target, vault_dir):
+            return GateResult(
+                "deny",
+                "vault projection: %s is generated from the signed trace by `zaude vault-sync` — "
+                "hand-editing it diverges from the trace (or is overwritten on the next sync). "
+                "Record the change through the lifecycle, then run /zvault-sync. Waiver: /waive "
+                "protect-vault-projection <reason>." % os.path.basename(ctx.target))
+    return GateResult("allow")
+
+
 # LIGHT BY DEFAULT [Deen]: design-before-impl engages ONLY for genuinely high-risk work.
 # Low/medium/unclassified work codes freely (the audit trail still records everything). Only
 # T3/T4 (auth, migrations, prod, security, destructive) require design+approval before code.
@@ -179,8 +204,8 @@ def design_before_impl_bash(ctx):
 # a `/waive design-before-impl` covers BOTH the Edit and the Bash source-write gate (same intent).
 design_before_impl_bash.waiver_id = "design_before_impl"
 
-GATES = [protect_zaude, protect_zaude_bash, design_before_impl, design_before_impl_bash,
-         deploy_needs_release_token]
+GATES = [protect_zaude, protect_zaude_bash, protect_vault_projection,
+         design_before_impl, design_before_impl_bash, deploy_needs_release_token]
 
 
 def evaluate(projection, tool, tool_input, zaude_dir):

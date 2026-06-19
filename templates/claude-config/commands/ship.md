@@ -1,5 +1,7 @@
 Complete the shipping workflow: review → commit → push → vault update. Stops at the first CRITICAL or HIGH finding.
 
+> **Zaude v2 check — do this FIRST.** If this repo has a `.zaude/` directory (walk up from cwd), it is a **v2 project**: shipping is a trace-recorded lifecycle gate, not a vault write. Do NOT run the v1 flow below or hand-edit `current-state.md` — use **`/zship`** (and `/zvault-sync` for the vault). The kernel's `protect_vault_projection` gate will block a hand-edit anyway. The steps below apply only to a v1 (non-`.zaude/`) project.
+
 ## Steps
 
 1. **Run the full review chain** (equivalent to `/review`):
