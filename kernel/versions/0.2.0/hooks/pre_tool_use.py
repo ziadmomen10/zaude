@@ -78,7 +78,7 @@ def main():
         _allow()
 
     try:
-        from lib import paths, gates, trace, state as st
+        from lib import paths, gates, trace, state as st, board
     except Exception:
         _allow()
 
@@ -121,8 +121,15 @@ def main():
         tinput = {}
     target = tinput.get("file_path") or tinput.get("notebook_path") or ""
 
+    # P4: gate against the ACTIVE work item's single-track sub-trace if one is set, else the root
+    # trace (today's path). active_item_dir() is TOTAL — None on ANY problem (no items dir, no active
+    # item, set-but-missing dir, error) -> root projection = byte-identical to today. The PROJECTION
+    # comes from the active item; gates.evaluate still receives the ROOT zaude_dir (so protect_zaude /
+    # _under still protect ALL of .zaude/, including items/). A forged ACTIVE sub-trace raises
+    # TraceForged here exactly like a forged root -> fail-closed in enforce. [P4 Approach A]
+    gate_dir = board.active_item_dir(zaude_dir) or zaude_dir
     try:
-        rows = trace.read_trace(zaude_dir, root, verify=True)
+        rows = trace.read_trace(gate_dir, root, verify=True)
         proj_state = st.reduce(rows)
         decision, reason, gate = gates.evaluate(proj_state, tool, tinput, zaude_dir)
         cur = proj_state.get("current_state")

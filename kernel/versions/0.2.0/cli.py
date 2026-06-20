@@ -106,6 +106,33 @@ def _resolve(args):
     return proj["zaude_dir"], proj["root"]
 
 
+def _resolve_active(args):
+    """LIFECYCLE/FLOW resolve (P4): like _resolve, but returns the ACTIVE work item's single-track
+    sub-trace dir when one is set, so a lifecycle command (clarify..close, fast, flow, next, dod,
+    status, repair, vault-sync) records into the active item's OWN trace. An explicit `--item <id>`
+    overrides the active pointer (and is created/required to exist). With no items/ dir and no active
+    item, returns `.zaude` — BYTE-IDENTICAL to today (the legacy single-track path). The ROOT is
+    returned UNCHANGED (the shared key + protect_zaude both key off the root). Returns (dir, root).
+
+    PM/BOARD/onboard commands keep using _resolve (the ROOT) — they manage the board itself, not an
+    item's lifecycle."""
+    from lib import board
+    zd, root = _resolve(args)
+    override = getattr(args, "item", None)
+    if override:
+        if not board._valid_item_id(override):
+            sys.stderr.write("refused: invalid --item id %r\n" % override)
+            sys.exit(3)
+        d = board.item_dir(zd, override)
+        if not os.path.isdir(d):
+            sys.stderr.write("refused: no such work item %r (run `item-activate --id %s` first)\n"
+                             % (override, override))
+            sys.exit(3)
+        return d, root
+    active = board.active_item_dir(zd)
+    return (active or zd), root
+
+
 # ---------------------------------------------------------------- commands
 def cmd_init(args):
     root = paths._real(args.path or os.getcwd())
@@ -129,14 +156,14 @@ def cmd_init(args):
 
 def _simple(frm, to, command, artifact, build_obj, extra_rows_fn=None):
     def fn(args):
-        zd, root = _resolve(args)
+        zd, root = _resolve_active(args)
         return _commit(zd, root, frm, to, command, artifact, build_obj(args),
                        extra_rows=(extra_rows_fn(args) if extra_rows_fn else None))
     return fn
 
 
 def cmd_classify_risk(args):
-    zd, root = _resolve(args)
+    zd, root = _resolve_active(args)
     return _commit(zd, root, "Designed", "RiskClassified", "/classify-risk", "risk.json",
                    {"tier": args.tier}, extra_rows=[{"kind": "risk", "tier": args.tier}])
 
@@ -331,7 +358,7 @@ def cmd_fast(args):
     """Fast lane for small/low-risk work: auto-complete Intake->Approved in ONE command so
     coding flows immediately. The full chain is still recorded in the trace (honest audit),
     you just don't run 6 commands. High-risk (T3/T4) is refused -> use the full chain. [Deen]"""
-    zd, root = _resolve(args)
+    zd, root = _resolve_active(args)
     if args.tier in gates.HIGH_RISK:
         sys.stderr.write("refused: fast-lane is for low/medium risk; %s needs the full chain "
                          "(/design -> /classify-risk -> /approve).\n" % args.tier)
@@ -357,7 +384,7 @@ def cmd_fast_ship(args):
     """Fast ship for small/low-risk work: Approved -> Released in ONE command. The ONE gate that
     stays is the evidence gate — it REFUSES to ship if tests didn't pass. High-risk uses the
     full review+verify chain. [Deen: light, but never ship broken]"""
-    zd, root = _resolve(args)
+    zd, root = _resolve_active(args)
     proj = st.reduce(trace.read_trace(zd, root, verify=True))
     if proj.get("risk_tier") in gates.HIGH_RISK:
         sys.stderr.write("refused: fast-ship is low/medium only; %s needs the full chain.\n"
@@ -398,7 +425,7 @@ def cmd_flow(args):
     recorded honestly ({"na":True}); applicable stages get a real driven artifact. Refuses high-risk
     (T3/T4) like /fast (a flow is the light, task-shaped lane; high-risk uses the full chain).
     Unknown --type => clean rc-3 refusal, no lock taken, no partial write. [Approach B]"""
-    zd, root = _resolve(args)
+    zd, root = _resolve_active(args)
     flow = args.type
     if flow not in FLOWS:
         sys.stderr.write("refused: unknown flow type '%s' (known: %s)\n"
@@ -431,7 +458,7 @@ def cmd_flow_finish(args):
     token at Released. For a terminal=="Reviewed" flow (audit/research/grooming) it issues NO release
     token ever (the work is investigation/grooming, not a deploy). Unknown --type => clean rc-3
     refusal, no lock taken, no partial write. [Approach B]"""
-    zd, root = _resolve(args)
+    zd, root = _resolve_active(args)
     flow = args.type
     if flow not in FLOWS:
         sys.stderr.write("refused: unknown flow type '%s' (known: %s)\n"
@@ -494,7 +521,7 @@ def cmd_review(args):
     """Tested -> Reviewed. Records the GRACEFUL codex seat (best-effort; never blocks). The ship
     gate still reads only `unresolved_critical_high`, so a codex 'fail' the driver wants to honor
     must be reflected there by the driver — codex never sets the gate by itself."""
-    zd, root = _resolve(args)
+    zd, root = _resolve_active(args)
     tier = st.reduce(trace.read_trace(zd, root, verify=True))["risk_tier"]
     unresolved = int(args.unresolved)
     # WRITE-FREE early refusal: a seat explicitly turned off/never at a CLEAN high-risk review with no
@@ -539,7 +566,7 @@ def cmd_review(args):
 
 
 def cmd_verify(args):
-    zd, root = _resolve(args)
+    zd, root = _resolve_active(args)
     obj = {"built_artifact_check": args.built, "health": args.health, "live_probe": args.probe}
     return _commit(zd, root, "Reviewed", "Verified", "/verify", "verification.json", obj)
 
@@ -547,7 +574,7 @@ def cmd_verify(args):
 def cmd_ship(args):
     """Shippable -> Released. Refuses unless the review ledger is CLEAN and verification
     exists; issues a release-token that unblocks deploy commands. [R7]"""
-    zd, root = _resolve(args)
+    zd, root = _resolve_active(args)
     ledger = _read_artifact(zd, "review-ledger.json")
     if not ledger or ledger.get("unresolved_critical_high", 1) != 0:
         sys.stderr.write("refused: /ship blocked — review ledger missing or has unresolved "
@@ -563,7 +590,7 @@ def cmd_ship(args):
 
 
 def cmd_waive(args):
-    zd, root = _resolve(args)
+    zd, root = _resolve_active(args)
     lp = trace.acquire_lock(zd)
     try:
         trace.append_row(zd, {"kind": "waiver", "gate": args.gate, "reason": args.reason,
@@ -696,42 +723,110 @@ def cmd_dod(args):
     applicable) AND the intake column is empty. This is 'tier-4 as DoD' — the loop stops on real
     done-with-evidence, NOT on 'looks healthy'. For build/bugfix (terminal Released) the condition is
     unchanged. A no-flow (old linear) trace defaults to `build` => EXACT current behavior. Exit 0 =
-    DoD met (loop may stop); exit 2 = keep the loop running. [Deen: tier-4=DoD; terminal-aware]"""
-    zd, root = _resolve(args)
-    proj = st.reduce(trace.read_trace(zd, root, verify=True))
-    arts = set(proj["artifacts"])
-    cur = proj["current_state"]
-    flow = active_flow(zd, root)
-    spec = FLOWS.get(flow, FLOWS[DEFAULT_FLOW])
-    terminal = spec.get("terminal", "Released")
-    applicable = spec.get("applicable", {})
-    has_verify = "verification.json" in arts
-    has_tests = "test-results.json" in arts
-    # Evidence is required ONLY for stages this flow marks applicable. For build (all applicable)
-    # this is exactly today's "tests + verification". For Reviewed-terminal flows, Verified is n/a,
-    # so verification evidence is not demanded (and is reported as not-applicable).
-    need_tests = "Tested" in applicable
-    need_verify = "Verified" in applicable
-    tests_ok = has_tests if need_tests else True
-    verify_ok = has_verify if need_verify else True
-    # `Released`/`Closed` keep their special standing for a release flow; for a Reviewed-terminal
-    # flow, reaching the terminal IS done.
-    done_state = _state_index(cur) >= _state_index(terminal)
-    open_intake = len(_board(zd, root)["intake"])
-    dod = done_state and tests_ok and verify_ok and open_intake == 0
+    DoD met (loop may stop); exit 2 = keep the loop running. [Deen: tier-4=DoD; terminal-aware]
+
+    P4 (behavior-preserving): the per-item TERMINAL+evidence predicate is FACTORED OUT to
+    board.item_done(); cmd_dod evaluates it against the ACTIVE item's sub-trace (or the root, legacy)
+    and ANDs in the BOARD-level "intake empty" condition — IDENTICAL to today on a no-items project."""
+    from lib import board
+    zd, root = _resolve_active(args)
+    pred = board.item_done(zd, root)   # per-item terminal+evidence predicate (factored out)
+    open_intake = len(_board(_resolve(args)[0], root)["intake"])  # intake is a ROOT/board fact
+    dod = pred["met"] and open_intake == 0
     print(json.dumps({
         "dod_met": dod,
-        "flow": flow,
-        "terminal": terminal,
-        "lifecycle_state": cur,
-        "has_passing_tests": has_tests,
-        "has_verification_evidence": (has_verify if need_verify else "n/a"),
+        "flow": pred["flow"],
+        "terminal": pred["terminal"],
+        "lifecycle_state": pred["lifecycle_state"],
+        "has_passing_tests": pred["has_passing_tests"],
+        "has_verification_evidence": pred["has_verification_evidence"],
         "open_intake_items": open_intake,
         "loop_should_continue": not dod,
         "verdict": "DoD MET — tier-4 done with evidence; loop may stop"
                    if dod else "NOT done — keep the loop running (no 'looks healthy' stop)",
     }, indent=2))
     return 0 if dod else 2
+
+
+# ---------------------------------------------------------------- P4: parallel board commands
+def cmd_item_activate(args):
+    """Create (lazily) the active work item's OWN single-track signed sub-trace under
+    .zaude/items/<id>/ and record {"kind":"item_activate"} on the ROOT trace. Idempotent: re-running
+    on an existing item re-records the marker without resetting its state. Uses the ROOT (_resolve)
+    — the board itself, not an item's lifecycle, owns activation. [P4]"""
+    from lib import board
+    zd, root = _resolve(args)
+    bd = board._root_board(zd, root)
+    if args.id not in bd["items"]:
+        sys.stderr.write("refused: %s is not a promoted backlog item (run /zpromote first; "
+                         "/zboard lists ids)\n" % args.id); return 3
+    d = board.activate_item(zd, root, args.id)
+    print("item-activate: %s -> %s (single-track sub-trace ready)"
+          % (args.id, os.path.relpath(d, root)))
+    return 0
+
+
+def cmd_active_set(args):
+    """Focus the autonomous loop on ONE work item (write the `active` pointer + record
+    {"kind":"active_set"} on the ROOT trace). `--id ""`/`--clear` clears the active item back to
+    root/legacy. Refuses an id whose sub-trace does not exist (activate it first). [P4]"""
+    from lib import board
+    zd, root = _resolve(args)
+    if not getattr(args, "clear", False) and not args.id:
+        sys.stderr.write("refused: pass --id <work-id> to focus an item, or --clear to clear "
+                         "the active item.\n"); return 3
+    iid = None if getattr(args, "clear", False) else (args.id or None)
+    if iid is not None:
+        if not board._valid_item_id(iid):
+            sys.stderr.write("refused: invalid work id %r\n" % iid); return 3
+        if not os.path.isdir(board.item_dir(zd, iid)):
+            sys.stderr.write("refused: no sub-trace for %s — run `item-activate --id %s` first\n"
+                             % (iid, iid)); return 3
+    board.set_active(zd, root, iid)
+    print("active-set: %s" % (iid if iid is not None else "(cleared — back to root/legacy)"))
+    return 0
+
+
+def cmd_board_next(args):
+    """Autonomous MULTI-ITEM loop helper: print the next BOARD-level action (promote an intake idea /
+    activate a promoted item / focus + drive an item / board-DoD MET), in priority order. Read-only;
+    exit 0. The driver runs the printed action, then calls board-next again. [P4]"""
+    from lib import board
+    zd, root = _resolve(args)
+    action, done = board.board_next(zd, root)
+    if getattr(args, "as_json", False):
+        print(json.dumps({"next_action": action, "board_dod_reached": done}))
+        return 0
+    if done:
+        print("board-DoD MET — every promoted item is done-with-evidence and intake is empty.")
+    else:
+        print("board-next: %s" % action)
+    return 0
+
+
+def cmd_board_dod(args):
+    """BOARD-level Definition-of-Done for the multi-item loop: met == intake empty AND every promoted
+    backlog item has a sub-trace AND each is item_done. Exit 0 = board DoD met (the outer loop may
+    stop); exit 2 = keep looping. A legacy project (no items/ dir) collapses to today's cmd_dod on the
+    root trace. [P4]"""
+    from lib import board
+    zd, root = _resolve(args)
+    if not os.path.isdir(board.items_root(zd)):
+        # legacy: no parallel board -> board-dod == cmd_dod on the root (exact back-compat).
+        return cmd_dod(args)
+    bd = board.board_dod(zd, root)
+    print(json.dumps({
+        "board_dod_met": bd["met"],
+        "items_total": bd["items_total"],
+        "items_done": bd["items_done"],
+        "unactivated_promoted": bd["unactivated_promoted"],
+        "unfinished_items": bd["unfinished_items"],
+        "open_intake_items": bd["open_intake_items"],
+        "loop_should_continue": not bd["met"],
+        "verdict": "BOARD-DoD MET — every promoted item done-with-evidence; intake empty"
+                   if bd["met"] else "NOT done — keep the multi-item loop running",
+    }, indent=2))
+    return 0 if bd["met"] else 2
 
 
 def _pm_dir(zd):
@@ -991,14 +1086,31 @@ def cmd_update(args):
 
 
 def cmd_trace_verify(args):
-    """Validate the signed trace: hash-chain + HMAC integrity + legal state replay. [L12]"""
+    """Validate the signed trace: hash-chain + HMAC integrity + legal state replay. [L12]
+
+    P4: after the ROOT trace, iterate every items/<id>/ sub-trace and verify each with the SAME
+    routine (one shared key). ANY item failure -> rc 5 naming the item. A legacy project (no items/
+    dir) verifies exactly as today."""
+    from lib import board
     zd, root = _resolve(args)
     try:
         rows = trace.read_trace(zd, root, verify=True)
         cur = st.project_state(rows)
     except (trace.TraceCorrupt, trace.TraceForged, st.StateForged) as e:
-        sys.stderr.write("TRACE INVALID: %s\n" % e); return 5
-    print("trace OK: %d rows, chain + MAC verified, state replay valid -> %s" % (len(rows), cur))
+        sys.stderr.write("TRACE INVALID (root): %s\n" % e); return 5
+    item_ids = board.list_item_ids(zd)
+    for wid in item_ids:
+        d = board.item_dir(zd, wid)
+        try:
+            irows = trace.read_trace(d, root, verify=True)
+            st.project_state(irows)
+        except (trace.TraceCorrupt, trace.TraceForged, st.StateForged) as e:
+            sys.stderr.write("TRACE INVALID (item %s): %s\n" % (wid, e)); return 5
+    if item_ids:
+        print("trace OK: root %d rows -> %s; %d item sub-trace(s) verified (chain + MAC + replay)"
+              % (len(rows), cur, len(item_ids)))
+    else:
+        print("trace OK: %d rows, chain + MAC verified, state replay valid -> %s" % (len(rows), cur))
     return 0
 
 
@@ -1218,7 +1330,7 @@ def cmd_next(args):
     Flow-aware PRESENTATION: if a non-build flow is active in the trace it skips that flow's n/a
     stages when printing the next command (a no-flow trace is identical to today). [Approach B]
     (Low/medium-risk work may instead collapse the chain via /fast + /fast-ship or /flow.)"""
-    zd, root = _resolve(args)
+    zd, root = _resolve_active(args)
     proj = _projection_out(zd, root)
     cur = proj["current_state"]
     flow = active_flow(zd, root)
@@ -1260,8 +1372,8 @@ def cmd_vault_sync(args):
     snapshot stamped with a trace anchor) and APPEND trace-anchored, idempotent entries to
     decisions.md. The trace stays the source of truth; the vault is a derived projection. Reads
     the trace with verify=True, so a forged/corrupt trace fails closed here too. [vault upgrade]"""
-    zd, root = _resolve(args)
-    slug = _slug(zd) or os.path.basename(root)
+    zd, root = _resolve_active(args)
+    slug = _slug(_resolve(args)[0]) or os.path.basename(root)
     vd = os.path.join(root, "vault", slug)
     if not os.path.isdir(vd):
         sys.stderr.write("vault-sync: no vault/%s — run `zaude onboard` first\n" % slug)
@@ -1530,13 +1642,14 @@ def cmd_route(args):
 
 
 def cmd_status(args):
-    zd, root = _resolve(args)
+    zd, root = _resolve_active(args)
     print(json.dumps(_projection_out(zd, root), indent=2))
     return 0
 
 
 def cmd_repair(args):
-    zd, root = _resolve(args)
+    from lib import board
+    zd, root = _resolve_active(args)
     try:
         rows = trace.read_trace(zd, root, verify=True)
         cur = st.project_state(rows)
@@ -1547,6 +1660,17 @@ def cmd_repair(args):
     except st.StateForged as e:
         sys.stderr.write("HALT: %s — forged transition; manual review.\n" % e); return 5
     _refresh_state(zd, root)
+    # P4: when a parallel board exists, also rebuild board.json (a DERIVED cache, like state.json) from
+    # the signed sub-traces. No items/ dir -> no-op (legacy projects are untouched). Never fatal.
+    root_zd = _resolve(args)[0]
+    if os.path.isdir(board.items_root(root_zd)):
+        try:
+            idx = board.rebuild_board_index(root_zd, root)
+            print("repaired: state.json rebuilt from %d rows -> %s; board index rebuilt (%d item(s))"
+                  % (len(rows), cur, len(idx["items"])))
+            return 0
+        except Exception as e:
+            sys.stderr.write("note: state.json rebuilt; board index rebuild failed (%s)\n" % e)
     print("repaired: state.json rebuilt from %d rows -> %s" % (len(rows), cur))
     return 0
 
@@ -1580,6 +1704,7 @@ def cmd_scan_markers(args):
 
 
 def cmd_doctor(args):
+    from lib import board
     zd, root = _resolve(args)
     issues = []
     try:
@@ -1587,6 +1712,13 @@ def cmd_doctor(args):
         st.reduce(rows)
     except Exception as e:
         issues.append("trace: %s" % e)
+    # P4: also verify each item sub-trace (one shared key). A bad item is a real issue naming it; a
+    # legacy project (no items/ dir) adds nothing -> identical output to today.
+    for wid in board.list_item_ids(zd):
+        try:
+            st.reduce(trace.read_trace(board.item_dir(zd, wid), root, verify=True))
+        except Exception as e:
+            issues.append("trace (item %s): %s" % (wid, e))
     if _kernel_version() != _project_kernel_version(zd):
         issues.append("kernel_version drift: project=%s current=%s"
                       % (_project_kernel_version(zd), _kernel_version()))
@@ -1715,6 +1847,11 @@ def cmd_opencode(args):
 def main(argv=None):
     p = argparse.ArgumentParser(prog="zaude")
     p.add_argument("--path", default=None)
+    # P4: a global override so any LIFECYCLE/FLOW command can target a specific work item's sub-trace
+    # instead of the active pointer (e.g. `zaude --item ZA-2026-00001 status`). Ignored by PM/board
+    # commands (they resolve the ROOT). [P4]
+    p.add_argument("--item", default=None, help="target a specific work item's sub-trace "
+                   "(.zaude/items/<id>/) for a lifecycle/flow command, overriding the active pointer")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sp = sub.add_parser("init"); sp.add_argument("--text", required=True)
@@ -1862,6 +1999,15 @@ def main(argv=None):
     sub.add_parser("pm-pull").set_defaults(fn=cmd_pm_pull)
 
     sub.add_parser("dod").set_defaults(fn=cmd_dod)
+
+    # P4: parallel board + autonomous multi-item loop commands.
+    sp = sub.add_parser("item-activate"); sp.add_argument("--id", required=True)
+    sp.set_defaults(fn=cmd_item_activate)
+    sp = sub.add_parser("active-set"); sp.add_argument("--id", default=None)
+    sp.add_argument("--clear", action="store_true"); sp.set_defaults(fn=cmd_active_set)
+    sp = sub.add_parser("board-next"); sp.add_argument("--json", dest="as_json", action="store_true")
+    sp.set_defaults(fn=cmd_board_next)
+    sub.add_parser("board-dod").set_defaults(fn=cmd_board_dod)
 
     sp = sub.add_parser("persona")
     sp.add_argument("--observe", default=None)

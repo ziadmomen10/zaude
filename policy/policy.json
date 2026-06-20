@@ -285,6 +285,30 @@
       "cli": "pm-mirror",
       "group": "pm",
       "summary": "Mirror the board to vault/<slug>/backlog.md + the memory index."
+    },
+    {
+      "name": "item-activate",
+      "cli": "item-activate",
+      "group": "pm",
+      "summary": "Activate a promoted backlog item: create its OWN single-track signed sub-trace under .zaude/items/<id>/ (the per-item reducer runs unchanged)."
+    },
+    {
+      "name": "active-set",
+      "cli": "active-set",
+      "group": "pm",
+      "summary": "Focus the autonomous loop on ONE work item (or --clear back to root). Lifecycle commands then record into that item's sub-trace."
+    },
+    {
+      "name": "board-next",
+      "cli": "board-next",
+      "group": "pm",
+      "summary": "Autonomous MULTI-ITEM loop helper: print the next board-level action (promote / activate / focus+drive / board-DoD MET)."
+    },
+    {
+      "name": "board-dod",
+      "cli": "board-dod",
+      "group": "pm",
+      "summary": "Board-level Definition-of-Done: met when intake is empty AND every promoted item has a sub-trace that is done-with-evidence."
     }
   ],
   "agents": [
