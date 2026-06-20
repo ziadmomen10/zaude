@@ -73,9 +73,15 @@ def render_agent(a):
 
 
 def render_hook_block(policy):
-    h = policy["hooks"]["PreToolUse"]
-    return {"matcher": h["matcher"],
-            "hooks": [{"type": "command", "command": h["command"], "timeout": h.get("timeout", 10)}]}
+    """Render settings.json hook block(s) for EVERY event in policy.hooks -> {event: block}.
+    A block carries 'matcher' only when the policy entry has one (PreToolUse is tool-matched;
+    UserPromptSubmit is not). [Zaude 3 P0b: the front-door hook must be reproducible too.]"""
+    out = {}
+    for event, h in policy.get("hooks", {}).items():
+        hooks = [{"type": "command", "command": h["command"], "timeout": h.get("timeout", 10)}]
+        out[event] = ({"matcher": h["matcher"], "hooks": hooks}
+                      if h.get("matcher") is not None else {"hooks": hooks})
+    return out
 
 
 def generate(out_dir=STAGING, policy_path=POLICY):

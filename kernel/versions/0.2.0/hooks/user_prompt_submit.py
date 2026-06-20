@@ -95,7 +95,11 @@ def main():
         head += "  alts=" + ", ".join(
             "/%s:%.2f" % (a.get("command"), a.get("confidence", 0.0)) for a in alts[:2])
 
-    if mode == "auto":
+    if cmd == "build":
+        guide = ("Run the /zbuild ENGINE (autonomous build loop: plan -> design -> implement -> "
+                 "review panel -> verify, recorded in the signed trace, to tier-4). Full-auto: keep "
+                 "going; HARD-STOP only on a destructive step, a CRITICAL/HIGH finding, or unclear scope.")
+    elif mode == "auto":
         guide = "Safe/read-only — run `zaude %s` and report the result." % cmd
     elif mode == "confirm":
         guide = ("DESTRUCTIVE/irreversible — CONFIRM with the operator before running "

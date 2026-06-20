@@ -759,7 +759,8 @@ def cmd_install(args):
         sys.stderr.write("refused: nothing staged — run `zaude gen` first.\n"); return 3
     try:
         hook_block = _strict_json(hbpath)
-        assert isinstance(hook_block, dict) and hook_block.get("hooks")
+        assert isinstance(hook_block, dict) and hook_block and all(
+            isinstance(b, dict) and b.get("hooks") for b in hook_block.values())
     except Exception as e:
         sys.stderr.write("refused: staged hook-block.json invalid (%s)\n" % e); return 3
     cmds = sorted(f for f in os.listdir(cmd_src) if f.endswith(".md"))
@@ -783,16 +784,17 @@ def cmd_install(args):
         sys.stderr.write("refused: ~/.claude/settings.json is not valid JSON (%s) — fix it first; "
                          "install will not risk your hooks.\n" % e); return 3
     sj = sj if sj is not None else {}
-    pre = sj.get("hooks", {}).get("PreToolUse")
-    if pre is not None and not isinstance(pre, list):
-        sys.stderr.write("refused: settings.json hooks.PreToolUse is not a list.\n"); return 3
+    for _ev in hook_block:
+        _arr = sj.get("hooks", {}).get(_ev)
+        if _arr is not None and not isinstance(_arr, list):
+            sys.stderr.write("refused: settings.json hooks.%s is not a list.\n" % _ev); return 3
 
     if not getattr(args, "yes", False):
         print("INSTALL PLAN (dry-run — re-run with --yes):")
         print("  snapshot ~/.claude first")
         print("  + %d slash commands -> ~/.claude/commands/%s<name>.md" % (len(cmds), prefix))
         print("  + %d capability agents -> ~/.claude/agents/" % len(agents))
-        print("  + 1 fail-open PreToolUse hook -> settings.json (per-project shadow/enforce)")
+        print("  + %d fail-open hook(s) -> settings.json (%s)" % (len(hook_block), ", ".join(hook_block)))
         if collisions:
             print("  !! %d NON-Zaude files would be overwritten (need --force):" % len(collisions))
             for c in collisions[:8]:
@@ -805,16 +807,17 @@ def cmd_install(args):
 
     rp = _snapshot_claude("install-" + (args.tag or "manual"))
     os.makedirs(cdst, exist_ok=True); os.makedirs(adst, exist_ok=True)
-    installed = {"prefix": prefix, "commands": [], "agents": [], "hook": hook_block}
+    installed = {"prefix": prefix, "commands": [], "agents": [], "hooks": hook_block}
     for fn in cmds:
         t = os.path.join(cdst, prefix + fn); shutil.copyfile(os.path.join(cmd_src, fn), t)
         installed["commands"].append(t)
     for fn in agents:
         t = os.path.join(adst, fn); shutil.copyfile(os.path.join(agent_src, fn), t)
         installed["agents"].append(t)
-    pre = sj.setdefault("hooks", {}).setdefault("PreToolUse", [])
-    if hook_block not in pre:   # exact-object idempotence — never substring-matches another hook
-        pre.append(hook_block)
+    for _ev, _block in hook_block.items():
+        _arr = sj.setdefault("hooks", {}).setdefault(_ev, [])
+        if _block not in _arr:   # exact-object idempotence — never substring-matches another hook
+            _arr.append(_block)
     trace.write_json_atomic(sjp, sj)
     trace.write_json_atomic(os.path.join(home, ".zaude", "installed.json"), installed)
     print("installed %d commands (prefix '%s') + %d agents + hook. snapshot: %s"
@@ -841,9 +844,11 @@ def cmd_uninstall(args):
         parse_ok = True
     except Exception:
         sj, parse_ok = None, False
-    if sj and isinstance(sj.get("hooks", {}).get("PreToolUse"), list):
-        hb = inst.get("hook")
-        sj["hooks"]["PreToolUse"] = [e for e in sj["hooks"]["PreToolUse"] if e != hb]
+    if sj and isinstance(sj.get("hooks"), dict):
+        blocks = inst.get("hooks") or ({"PreToolUse": inst.get("hook")} if inst.get("hook") else {})
+        for _ev, _block in blocks.items():
+            if isinstance(sj["hooks"].get(_ev), list):
+                sj["hooks"][_ev] = [e for e in sj["hooks"][_ev] if e != _block]
         trace.write_json_atomic(sjp, sj)
     if not parse_ok and os.path.isfile(sjp):
         # couldn't parse settings -> couldn't remove the hook -> KEEP the manifest so a retry works
