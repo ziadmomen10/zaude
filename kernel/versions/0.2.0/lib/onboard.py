@@ -37,16 +37,43 @@ def scaffold_vault(root, slug, stack, intent=""):
     return vd, created
 
 
-def git_init(root):
-    if os.path.isdir(os.path.join(root, ".git")):
-        return False
+# .zaude operational / sidecar state that must never be git-tracked (the signed trace + project
+# marker ARE tracked; these are local health/secret/scratch files). opencode.json was missing from
+# the original fresh-init list. [ZI-001 + codex review HIGH]
+_ZAUDE_IGNORE = (".zaude/.lock", ".zaude/*.tmp.*", ".zaude/codex.json", ".zaude/opencode.json",
+                 ".zaude/persona/", ".zaude/memory/", "__pycache__/")
+
+
+def ensure_gitignore(root):
+    """Ensure every .zaude sidecar entry is git-ignored — for FRESH and EXISTING git projects alike
+    (ZI-001: an existing-git project previously got NO ignore entries because git_init returned
+    early), appending only the MISSING lines idempotently. Never raises. Returns the lines added."""
+    gi = os.path.join(root, ".gitignore")
     try:
-        subprocess.run(["git", "init", "-q", root], capture_output=True, timeout=20)
-        gi = os.path.join(root, ".gitignore")
-        if not os.path.exists(gi):
-            with open(gi, "w", encoding="utf-8") as f:
-                f.write(".zaude/.lock\n.zaude/*.tmp.*\n.zaude/codex.json\n"
-                        ".zaude/persona/\n.zaude/memory/\n__pycache__/\n")
-        return True
+        existing = ""
+        if os.path.exists(gi):
+            with open(gi, "r", encoding="utf-8") as f:
+                existing = f.read()
+        have = set(existing.splitlines())
+        missing = [e for e in _ZAUDE_IGNORE if e not in have]
+        if missing:
+            sep = "" if (existing == "" or existing.endswith("\n")) else "\n"
+            with open(gi, "a", encoding="utf-8") as f:
+                f.write(sep + "\n".join(missing) + "\n")
+        return missing
     except Exception:
-        return False
+        return []
+
+
+def git_init(root):
+    """git init if needed, then ALWAYS ensure the .zaude sidecar gitignore entries exist (fresh OR
+    existing git). Returns True iff a new repo was initialized. Never raises. [ZI-001]"""
+    new = False
+    if not os.path.isdir(os.path.join(root, ".git")):
+        try:
+            subprocess.run(["git", "init", "-q", root], capture_output=True, timeout=20)
+            new = True
+        except Exception:
+            new = False
+    ensure_gitignore(root)
+    return new

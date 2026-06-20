@@ -145,16 +145,22 @@ class CodexGracefulTests(TmpCase):
                     ["classify-risk", "--tier", "T4"], ["approve", "--by", "op"], ["implement"],
                     ["test", "--cmd", "t", "--exit", "0"]):
             self.assertEqual(self._cli(*cmd).returncode, 0, cmd)
-        # /review in-process with codex forced MISSING
-        import lib.codex as cx
+        # /review in-process with codex forced MISSING. Force opencode MISSING too: this lock is
+        # about the codex seat being ABSENT (anti-fail-closed) — on a box where opencode is actually
+        # installed it would otherwise trip the (separate) panel-enforcement gate, which is not what
+        # this test exercises. Both absent => both 'unavailable' => panel gate silent (correct).
+        import lib.codex as cx, lib.opencode as oc
         orig = cx.probe
+        oc_orig = oc.probe
         cx.probe = lambda *a, **k: {"status": "missing", "version": None, "auth_source": None,
                                     "detail": "absent", "checked_at": time.time()}
+        oc.probe = lambda *a, **k: {"status": oc.MISSING, "version": None, "detail": "absent"}
         try:
             rc = cli.cmd_review(self._ap.Namespace(path=self.tmp, summary="", unresolved="0",
                                                    codex="auto", codex_verdict=None, codex_summary=""))
         finally:
             cx.probe = orig
+            oc.probe = oc_orig
         self.assertEqual(rc, 0)
         ledger = json.load(open(os.path.join(self.tmp, ".zaude", "artifacts",
                                              "review-ledger.json"), encoding="utf-8"))
@@ -759,16 +765,21 @@ class OpenCodeGracefulTests(TmpCase):
         self.assertIn(oc.probe().get("status"), (oc.MISSING, oc.PRESENT_NOAUTH, oc.READY))
 
     def test_review_ledger_carries_both_seats_and_opencode_never_gates(self):
-        # full chain to Reviewed at T4 with opencode absent on this box -> /review still commits (0),
-        # the ledger records BOTH seats, and unresolved_critical_high is untouched by either seat.
+        # full chain to Reviewed at T4 -> /review commits (0), the ledger records BOTH seats, and
+        # unresolved_critical_high is untouched by either seat. This runs as a real subprocess, so it
+        # sees the box's REAL probes; deliberate skip-acks satisfy the (separate) panel-enforcement
+        # gate on a box that HAS the seats and are harmless no-ops on a box that doesn't — keeping the
+        # invariant under test (a seat never mutates the ship-gate input) environment-independent.
         for cmd in (["init", "--text", "x", "--mode", "enforce"],
                     ["clarify", "--acceptance", "a"], ["prioritize", "--decision", "d"],
                     ["plan", "--steps", "a"], ["design", "--approach", "x", "--decision", "D"],
                     ["classify-risk", "--tier", "T4"], ["approve", "--by", "op"], ["implement"],
                     ["test", "--cmd", "pytest", "--exit", "0"]):
             self.assertEqual(self._cli(*cmd).returncode, 0, cmd)
-        r = self._cli("review", "--unresolved", "0")
-        self.assertEqual(r.returncode, 0, r.stderr)           # opencode absent NEVER fails /review
+        r = self._cli("review", "--unresolved", "0",
+                      "--skip-codex-ack", "n/a for this lock",
+                      "--skip-opencode-ack", "n/a for this lock")
+        self.assertEqual(r.returncode, 0, r.stderr)           # a recorded seat NEVER fails /review
         led = json.load(open(os.path.join(self.tmp, ".zaude", "artifacts", "review-ledger.json"),
                              encoding="utf-8"))
         self.assertIn("codex", led["review_seats"])
@@ -1044,6 +1055,265 @@ class AdaptiveFlowsTests(TmpCase):
         self.assertEqual(by_name["flow-finish"]["group"], "flows")
         self.assertTrue(by_name["flow"]["body"].strip())          # per-type agent-driving body
         self.assertTrue(by_name["flow-finish"]["body"].strip())
+
+
+class PanelEnforcementTests(TmpCase):
+    """The PANEL-ENFORCEMENT GATE (Approach B). Closes the diagnosed hole: a CLEAN review
+    (unresolved_critical_high == 0) could be recorded with the model-diverse seats SILENTLY skipped
+    (codex/opencode outcome 'skipped', reason off/never/available_not_run) — so /review + /ship passed
+    while no diverse reviewer ever looked. The gate refuses such a clean high-risk review unless the
+    seat was RUN (a verdict) or DELIBERATELY acknowledged (skip_ack). It is PURE and best-effort: it
+    spawns NOTHING, never fires for a genuinely un-runnable reviewer, and never fires below T3."""
+    import argparse as _ap
+
+    def _cli(self, *a):
+        return subprocess.run([sys.executable, os.path.join(VROOT, "cli.py"), "--path", self.tmp]
+                              + list(a), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    @staticmethod
+    def _skipped(reason, ack=None):
+        from lib.review_seats import _seat
+        return _seat("skipped", reason=reason, skip_ack=ack)
+
+    @staticmethod
+    def _seat_named(outcome, reason=None):
+        from lib.review_seats import _seat
+        return _seat(outcome, reason=reason)
+
+    # ---------- pure panel_skip_block() unit locks ----------
+    def test_silent_below_T3(self):
+        from lib.review_seats import panel_skip_block
+        seats = {"codex": self._skipped("off"), "opencode": self._skipped("off")}
+        for tier in ("T0", "T1", "T2", None):
+            self.assertIsNone(panel_skip_block(tier, seats))   # panel not engaged below T3
+
+    def test_fires_on_off_unacked_T4(self):
+        from lib.review_seats import panel_skip_block
+        seats = {"codex": self._skipped("off"), "opencode": self._seat_named("used")}
+        self.assertEqual(panel_skip_block("T4", seats), ("codex", "off"))
+
+    def test_fires_on_available_not_run_unacked(self):
+        from lib.review_seats import panel_skip_block
+        seats = {"codex": self._seat_named("used"),
+                 "opencode": self._skipped("available_not_run")}
+        self.assertEqual(panel_skip_block("T3", seats), ("opencode", "available_not_run"))
+
+    def test_fires_on_never_unacked(self):
+        from lib.review_seats import panel_skip_block
+        seats = {"codex": self._skipped("never"), "opencode": self._seat_named("used")}
+        self.assertEqual(panel_skip_block("T4", seats), ("codex", "never"))
+
+    def test_ack_suppresses_off_and_available(self):
+        from lib.review_seats import panel_skip_block
+        seats = {"codex": self._skipped("off", ack="diverse review n/a — offline"),
+                 "opencode": self._skipped("available_not_run", ack="ran by hand, no findings")}
+        self.assertIsNone(panel_skip_block("T4", seats))   # both deliberately acknowledged
+
+    def test_unrunnable_and_neutral_never_fire(self):
+        from lib.review_seats import panel_skip_block
+        # missing / present_noauth / no_credit / unavailable / seat_error / used / low_risk: NEVER
+        for codex_seat in (self._seat_named("unavailable", "missing"),
+                           self._seat_named("unavailable", "present_noauth"),
+                           self._seat_named("unavailable", "seat_error"),
+                           self._seat_named("no_credit", "quota"),
+                           self._seat_named("used"),
+                           self._skipped("low_risk")):
+            seats = {"codex": codex_seat, "opencode": self._seat_named("used")}
+            self.assertIsNone(panel_skip_block("T4", seats), codex_seat)
+
+    def test_deterministic_first_offender(self):
+        from lib.review_seats import panel_skip_block
+        # both silently skipped -> codex (first in order) is reported, not opencode
+        seats = {"codex": self._skipped("off"), "opencode": self._skipped("available_not_run")}
+        self.assertEqual(panel_skip_block("T4", seats), ("codex", "off"))
+
+    def test_seat_record_carries_skip_ack(self):
+        s = self._skipped("off", ack="deliberate")
+        self.assertEqual(s["skip_ack"], "deliberate")
+        self.assertEqual((s["outcome"], s["reason"]), ("skipped", "off"))
+
+    def test_low_risk_skip_never_carries_ack(self):
+        # the low_risk skip path must NOT carry an ack (panel not engaged there)
+        import cli
+        zd = os.path.join(self.tmp, ".zaude"); os.makedirs(zd, exist_ok=True)
+        args = self._ap.Namespace(codex="auto", skip_codex_ack="should be ignored")
+        s = cli._codex_review_seat(zd, args, "T1")
+        self.assertEqual(s["reason"], "low_risk")
+        self.assertIsNone(s.get("skip_ack"))
+
+    def test_off_seat_carries_ack_via_seat_builder(self):
+        import cli
+        zd = os.path.join(self.tmp, ".zaude"); os.makedirs(zd, exist_ok=True)
+        args = self._ap.Namespace(codex="off", skip_codex_ack="offline box")
+        s = cli._codex_review_seat(zd, args, "T4")
+        self.assertEqual((s["outcome"], s["reason"]), ("skipped", "off"))
+        self.assertEqual(s["skip_ack"], "offline box")
+
+    def test_getattr_no_arg_does_not_raise(self):
+        # partial Namespace (no skip_*_ack, no opencode_*) must not raise — getattr defaults
+        import cli
+        zd = os.path.join(self.tmp, ".zaude"); os.makedirs(zd, exist_ok=True)
+        cs = cli._codex_review_seat(zd, self._ap.Namespace(), "T4")
+        os_ = cli._opencode_review_seat(zd, self._ap.Namespace(), "T4")
+        self.assertIn(cs["outcome"], ("skipped", "unavailable", "no_credit", "used"))
+        self.assertIn(os_["outcome"], ("skipped", "unavailable", "no_credit", "used"))
+
+    def test_panel_skip_block_never_raises_on_bad_shape(self):
+        from lib.review_seats import panel_skip_block
+        self.assertIsNone(panel_skip_block("T4", None))
+        self.assertIsNone(panel_skip_block("T4", {}))
+        self.assertIsNone(panel_skip_block("T4", {"codex": None}))
+        self.assertIsNone(panel_skip_block("T4", {"codex": {}}))
+
+    # ---------- cmd_review integration locks ----------
+    def _to_tested_T4(self):
+        """Drive a fresh project to Tested at T4 (the state /review consumes)."""
+        self.assertEqual(self._cli("init", "--text", "x", "--mode", "enforce").returncode, 0)
+        for cmd in (["clarify", "--acceptance", "a"], ["prioritize", "--decision", "d"],
+                    ["plan", "--steps", "a"], ["design", "--approach", "x", "--decision", "D"],
+                    ["classify-risk", "--tier", "T4"], ["approve", "--by", "op"], ["implement"],
+                    ["test", "--cmd", "t", "--exit", "0"]):
+            self.assertEqual(self._cli(*cmd).returncode, 0, cmd)
+
+    def _review_inproc(self, ns_kwargs):
+        """Run cli.cmd_review in-process with BOTH probes forced READY (no spawn). Returns rc."""
+        import cli, lib.codex as cx, lib.opencode as oc
+        ready = lambda *a, **k: {"status": "ready", "version": "1", "auth_source": "env",
+                                 "detail": "ok", "checked_at": time.time()}
+        oc_ready = lambda *a, **k: {"status": oc.READY, "version": "1", "detail": "ok"}
+        co, oo = cx.probe, oc.probe
+        cx.probe, oc.probe = ready, oc_ready
+        try:
+            base = dict(path=self.tmp, summary="", unresolved="0",
+                        codex="auto", codex_verdict=None, codex_summary="", codex_error=None,
+                        codex_retry_at=None, opencode="auto", opencode_verdict=None,
+                        opencode_summary="", opencode_error=None, opencode_retry_at=None,
+                        skip_codex_ack=None, skip_opencode_ack=None)
+            base.update(ns_kwargs)
+            return cli.cmd_review(self._ap.Namespace(**base))
+        finally:
+            cx.probe, oc.probe = co, oo
+
+    def _ledger_path(self):
+        return os.path.join(self.tmp, ".zaude", "artifacts", "review-ledger.json")
+
+    def _current_state(self):
+        proj = st.reduce(trace.read_trace(os.path.join(self.tmp, ".zaude"), self.root, verify=True))
+        return proj["current_state"]
+
+    def test_clean_T4_both_ready_no_ack_refuses_writes_nothing(self):
+        # the regression itself: clean review, both probes READY but seats off-by-default? No —
+        # 'auto' + READY => available_not_run for BOTH; clean review must REFUSE and write nothing.
+        self._to_tested_T4()
+        rc = self._review_inproc({"unresolved": "0"})
+        self.assertEqual(rc, 3)
+        self.assertFalse(os.path.exists(self._ledger_path()))   # NO ledger written
+        self.assertEqual(self._current_state(), "Tested")       # state UNCHANGED
+
+    def test_clean_T4_off_no_ack_refuses(self):
+        self._to_tested_T4()
+        rc = self._review_inproc({"unresolved": "0", "codex": "off", "opencode": "off"})
+        self.assertEqual(rc, 3)
+        self.assertFalse(os.path.exists(self._ledger_path()))
+        self.assertEqual(self._current_state(), "Tested")
+
+    def test_clean_T4_with_acks_records_and_ledger_carries_ack(self):
+        self._to_tested_T4()
+        rc = self._review_inproc({"unresolved": "0", "codex": "off", "opencode": "off",
+                                  "skip_codex_ack": "offline box",
+                                  "skip_opencode_ack": "offline box"})
+        self.assertEqual(rc, 0)
+        led = json.load(open(self._ledger_path(), encoding="utf-8"))
+        self.assertEqual(led["review_seats"]["codex"]["skip_ack"], "offline box")
+        self.assertEqual(led["review_seats"]["opencode"]["skip_ack"], "offline box")
+        self.assertEqual(self._current_state(), "Reviewed")
+
+    def test_clean_T4_with_verdicts_records(self):
+        self._to_tested_T4()
+        rc = self._review_inproc({"unresolved": "0", "codex_verdict": "pass",
+                                  "opencode_verdict": "pass"})
+        self.assertEqual(rc, 0)
+        led = json.load(open(self._ledger_path(), encoding="utf-8"))
+        self.assertEqual(led["review_seats"]["codex"]["outcome"], "used")
+        self.assertEqual(led["review_seats"]["opencode"]["outcome"], "used")
+
+    def test_unresolved_gt_zero_bypasses_panel_gate(self):
+        # not a clean review -> the panel gate must NOT engage (the ship gate already blocks it).
+        self._to_tested_T4()
+        rc = self._review_inproc({"unresolved": "2", "codex": "off", "opencode": "off"})
+        self.assertEqual(rc, 0)
+        led = json.load(open(self._ledger_path(), encoding="utf-8"))
+        self.assertEqual(led["unresolved_critical_high"], 2)
+
+    def test_absent_probes_clean_still_records(self):
+        # best-effort preserved: when both probes are MISSING (un-runnable), a clean review records.
+        self._to_tested_T4()
+        import cli, lib.codex as cx, lib.opencode as oc
+        miss = lambda *a, **k: {"status": "missing", "version": None, "auth_source": None,
+                                "detail": "absent", "checked_at": time.time()}
+        oc_miss = lambda *a, **k: {"status": oc.MISSING, "version": None, "detail": "absent"}
+        co, oo = cx.probe, oc.probe
+        cx.probe, oc.probe = miss, oc_miss
+        try:
+            rc = cli.cmd_review(self._ap.Namespace(path=self.tmp, summary="", unresolved="0"))
+        finally:
+            cx.probe, oc.probe = co, oo
+        self.assertEqual(rc, 0)
+        led = json.load(open(self._ledger_path(), encoding="utf-8"))
+        self.assertEqual(led["review_seats"]["codex"]["outcome"], "unavailable")
+        self.assertEqual(self._current_state(), "Reviewed")
+
+    def test_probe_that_raises_degrades_and_never_blocks(self):
+        # a probe that RAISES degrades the seat to unavailable(seat_error) -> never blocks a clean
+        # review (the panel gate only fires on a real available-but-skipped seat).
+        self._to_tested_T4()
+        import cli, lib.codex as cx, lib.opencode as oc
+        def boom(*a, **k):
+            raise RuntimeError("probe blew up")
+        co, oo = cx.probe, oc.probe
+        cx.probe, oc.probe = boom, boom
+        try:
+            rc = cli.cmd_review(self._ap.Namespace(path=self.tmp, summary="", unresolved="0"))
+        finally:
+            cx.probe, oc.probe = co, oo
+        self.assertEqual(rc, 0)
+        led = json.load(open(self._ledger_path(), encoding="utf-8"))
+        self.assertEqual(led["review_seats"]["codex"]["outcome"], "unavailable")
+        self.assertEqual(led["review_seats"]["codex"]["reason"], "seat_error")
+        self.assertEqual(self._current_state(), "Reviewed")
+
+
+class OnboardGitignoreTests(TmpCase):
+    # ZI-001 + codex review HIGH: .zaude sidecars (incl. opencode.json) must be gitignored for
+    # fresh AND existing-git projects, idempotently.
+    def test_fresh_gitignore_includes_both_health_caches(self):
+        from lib import onboard
+        onboard.git_init(self.tmp)
+        gi = open(os.path.join(self.tmp, ".gitignore"), encoding="utf-8").read()
+        self.assertIn(".zaude/codex.json", gi)
+        self.assertIn(".zaude/opencode.json", gi)        # the entry the fresh-init list missed
+        self.assertIn(".zaude/memory/", gi)
+
+    def test_existing_git_project_still_gets_entries(self):
+        from lib import onboard
+        os.makedirs(os.path.join(self.tmp, ".git"), exist_ok=True)   # simulate an existing repo
+        self.assertFalse(onboard.git_init(self.tmp))                 # not a NEW repo
+        gi = open(os.path.join(self.tmp, ".gitignore"), encoding="utf-8").read()
+        self.assertIn(".zaude/opencode.json", gi)                   # entries added anyway (was the bug)
+        self.assertIn(".zaude/codex.json", gi)
+
+    def test_ensure_gitignore_idempotent_and_preserves_existing(self):
+        from lib import onboard
+        gi = os.path.join(self.tmp, ".gitignore")
+        with open(gi, "w", encoding="utf-8") as f:
+            f.write("node_modules/\n")                               # a pre-existing user entry
+        onboard.ensure_gitignore(self.tmp)
+        first = open(gi, encoding="utf-8").read()
+        onboard.ensure_gitignore(self.tmp)
+        second = open(gi, encoding="utf-8").read()
+        self.assertEqual(first, second)                             # no duplicate entries on re-run
+        self.assertIn("node_modules/", second)                     # user content preserved
+        self.assertIn(".zaude/opencode.json", second)
 
 
 if __name__ == "__main__":

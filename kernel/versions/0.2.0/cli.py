@@ -487,7 +487,7 @@ def cmd_flow_finish(args):
 
 # seat logic extracted to lib/review_seats.py (finding E); re-exported for a stable API.
 from lib.review_seats import (  # noqa: E402
-    _seat, _panel_seat, _codex_review_seat, _opencode_review_seat)
+    _seat, _panel_seat, _codex_review_seat, _opencode_review_seat, panel_skip_block)
 
 
 def cmd_review(args):
@@ -497,11 +497,42 @@ def cmd_review(args):
     zd, root = _resolve(args)
     tier = st.reduce(trace.read_trace(zd, root, verify=True))["risk_tier"]
     unresolved = int(args.unresolved)
+    # WRITE-FREE early refusal: a seat explicitly turned off/never at a CLEAN high-risk review with no
+    # ack is refused BEFORE any seat is built, so NO seat health-cache (codex.json/opencode.json) is
+    # even touched. (The post-build panel_skip_block below additionally catches the available-but-not-
+    # run case; building a seat only updates its own gitignored health-cache, never the trace/ledger.)
+    # [codex review HIGH: keep the off/never refusal fully write-free]
+    if unresolved == 0 and tier in gates.HIGH_RISK:
+        for _nm, _mode, _ack in (("codex", getattr(args, "codex", "auto"),
+                                  getattr(args, "skip_codex_ack", None)),
+                                 ("opencode", getattr(args, "opencode", "auto"),
+                                  getattr(args, "skip_opencode_ack", None))):
+            if _mode in ("off", "never") and not _ack:
+                sys.stderr.write("refused: /review cannot record a CLEAN review — the %s seat is "
+                                 "turned %s at %s without acknowledgement. Run it and pass "
+                                 "--%s-verdict pass|concerns|fail, or record a deliberate skip with "
+                                 "--skip-%s-ack \"<reason>\".\n" % (_nm, _mode, tier, _nm, _nm))
+                return 3
     # TWO best-effort external seats (codex + opencode); each is independent and NEITHER touches
     # `unresolved_critical_high` — the ship gate reads only that, so neither seat can gate. The
     # driver folds any verdict it wants to HONOR into --unresolved itself.
     seats = {"codex": _codex_review_seat(zd, args, tier),
              "opencode": _opencode_review_seat(zd, args, tier)}
+    # PANEL-ENFORCEMENT GATE (high-risk, clean-review only): a CLEAN review (no unresolved
+    # CRITICAL/HIGH) must NOT be recordable while a model-diverse seat that WAS AVAILABLE (or turned
+    # off) is silently skipped — the diagnosed hole. Refuse BEFORE any write/trace append (write
+    # NOTHING, return 3) unless that seat was run (a verdict) or deliberately acked. Seats stay
+    # best-effort: a genuinely un-runnable reviewer (missing/noauth/no_credit/error) never fires, and
+    # the kernel still makes ZERO external AI calls. unresolved>0 bypasses (already not clean).
+    if unresolved == 0:
+        blocked = panel_skip_block(tier, seats)
+        if blocked is not None:
+            name, reason = blocked
+            sys.stderr.write("refused: /review cannot record a CLEAN review — the %s seat was "
+                             "AVAILABLE (%s) but skipped without acknowledgement. Run it and pass "
+                             "--%s-verdict pass|concerns|fail, or record a deliberate skip with "
+                             "--skip-%s-ack \"<reason>\".\n" % (name, reason, name, name))
+            return 3
     obj = {"findings_summary": args.summary, "unresolved_critical_high": unresolved,
            "risk_tier_at_review": tier, "review_seats": seats}
     return _commit(zd, root, "Tested", "Reviewed", "/review", "review-ledger.json", obj)
@@ -1769,6 +1800,16 @@ def main(argv=None):
     sp.add_argument("--opencode-retry-at", dest="opencode_retry_at", default=None,
                     help="explicit retry time (epoch seconds or ISO-8601) for an opencode no-credit "
                          "backoff; overrides any reset hint parsed from --opencode-error.")
+    # PANEL-ENFORCEMENT acks: at T3/T4 a CLEAN /review refuses if a model-diverse seat was AVAILABLE
+    # (or turned off) yet skipped without acknowledgement. Record a DELIBERATE skip with the reason.
+    sp.add_argument("--skip-codex-ack", dest="skip_codex_ack", default=None,
+                    help="acknowledge a deliberate codex skip on a CLEAN high-risk review (the "
+                         "reason). Without it, a clean T3/T4 /review refuses when codex was "
+                         "available/off but not run. Best-effort seat — still spawns nothing.")
+    sp.add_argument("--skip-opencode-ack", dest="skip_opencode_ack", default=None,
+                    help="acknowledge a deliberate opencode skip on a CLEAN high-risk review (the "
+                         "reason). Without it, a clean T3/T4 /review refuses when opencode was "
+                         "available/off but not run. Best-effort seat — still spawns nothing.")
     sp.set_defaults(fn=cmd_review)
 
     sp = sub.add_parser("verify"); sp.add_argument("--built", default="ok")
