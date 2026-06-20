@@ -78,7 +78,7 @@ def main():
         _allow()
 
     try:
-        from lib import paths, gates, trace, state as st, board
+        from lib import paths, gates, trace, state as st
     except Exception:
         _allow()
 
@@ -127,7 +127,15 @@ def main():
     # comes from the active item; gates.evaluate still receives the ROOT zaude_dir (so protect_zaude /
     # _under still protect ALL of .zaude/, including items/). A forged ACTIVE sub-trace raises
     # TraceForged here exactly like a forged root -> fail-closed in enforce. [P4 Approach A]
-    gate_dir = board.active_item_dir(zaude_dir, root) or zaude_dir
+    #
+    # ISOLATE the board hop off the gate's critical path: board.py is NOT trusted to keep the gate
+    # alive. A broken/throwing `import board` or active_item_dir() must NEVER disable the gate — on
+    # ANY failure fall back to the ROOT trace (today's path), which still enforces. [safety]
+    try:
+        from lib import board
+        gate_dir = board.active_item_dir(zaude_dir, root) or zaude_dir
+    except Exception:
+        gate_dir = zaude_dir
     try:
         rows = trace.read_trace(gate_dir, root, verify=True)
         proj_state = st.reduce(rows)

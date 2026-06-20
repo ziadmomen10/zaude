@@ -498,6 +498,12 @@ def cmd_flow_finish(args):
     driven = {}
     post = None
     if spec["release"]:
+        # FIX 1 (HIGH): a RELEASE flow MUST present test evidence. Omitting --tested-exit no longer
+        # defaults to a phantom "0" that silently passes the gate, "ships", and mints a release token.
+        if args.tested_exit is None:
+            sys.stderr.write("refused: flow '%s' is a release flow — pass --tested-exit <code> "
+                             "(0 = tests passed). flow-finish will not ship without test evidence.\n"
+                             % flow); return 3
         if int(args.tested_exit) != 0:
             sys.stderr.write("refused: tests did not pass (exit %s) — flow-finish will not ship "
                              "broken code.\n" % args.tested_exit); return 3
@@ -1678,9 +1684,17 @@ def cmd_repair(args):
     except st.StateForged as e:
         sys.stderr.write("HALT: %s — forged transition; manual review.\n" % e); return 5
     _refresh_state(zd, root)
+    # P4: when an item is ACTIVE, zd is the item sub-trace dir (!= root .zaude). _refresh_state above
+    # only rebuilt the ITEM's state.json — also refresh the ROOT state cache so it isn't left stale.
+    # For legacy/no-item projects root_zd == zd, so this is a harmless rebuild of the same dir.
+    root_zd = _resolve(args)[0]
+    if root_zd != zd:
+        try:
+            _refresh_state(root_zd, root)
+        except Exception as e:
+            sys.stderr.write("note: item state rebuilt; root state refresh failed (%s)\n" % e)
     # P4: when a parallel board exists, also rebuild board.json (a DERIVED cache, like state.json) from
     # the signed sub-traces. No items/ dir -> no-op (legacy projects are untouched). Never fatal.
-    root_zd = _resolve(args)[0]
     if os.path.isdir(board.items_root(root_zd)):
         try:
             idx = board.rebuild_board_index(root_zd, root)
@@ -1917,7 +1931,12 @@ def main(argv=None):
 
     sp = sub.add_parser("flow-finish"); sp.add_argument("--type", required=True)
     sp.add_argument("--tested-cmd", dest="tested_cmd", default="tests")
-    sp.add_argument("--tested-exit", dest="tested_exit", default="0")
+    # FIX 1 (HIGH): no silent-pass default. Default None (NOT "0") so a RELEASE flow (build/bugfix)
+    # that OMITS --tested-exit is REFUSED at the evidence gate instead of silently shipping with a
+    # phantom exit 0. Reviewed-terminal flows (audit/research/grooming) never read it, so it stays
+    # optional for them (a blanket argparse required=True would wrongly break those + the unknown-type
+    # refusal path). cmd_flow_finish enforces presence only on the release branch.
+    sp.add_argument("--tested-exit", dest="tested_exit", default=None)
     sp.add_argument("--deploy-id", dest="deploy_id", default="d1")
     sp.set_defaults(fn=cmd_flow_finish)
 

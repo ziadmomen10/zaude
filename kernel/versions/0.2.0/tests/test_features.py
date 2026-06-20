@@ -942,6 +942,23 @@ class AdaptiveFlowsTests(TmpCase):
         self.assertEqual(proj["current_state"], "Released")
         self.assertTrue(proj["release_token_active"])
 
+    # ---- flow-finish on a RELEASE flow REFUSES when --tested-exit is omitted (no silent-pass) [FIX 1] ----
+    def test_flow_finish_release_refuses_when_tested_exit_omitted(self):
+        # Regression lock: --tested-exit used to default to "0", so `flow-finish --type bugfix` with
+        # the flag OMITTED would silently pass the evidence gate, "ship", and mint a release token.
+        # The default is now None and the release branch REFUSES (rc 3) with no work done — the state
+        # must stay Approved with no release token issued. (Reviewed-terminal flows keep the flag
+        # optional, so a blanket argparse required=True is wrong; the gate lives in cmd_flow_finish.)
+        self._cli("init", "--text", "bug", "--mode", "enforce")
+        self._cli("flow", "--type", "bugfix", "--note", "x")     # opens -> Approved (release flow)
+        r = self._cli("flow-finish", "--type", "bugfix")          # --tested-exit OMITTED
+        self.assertEqual(r.returncode, 3, r.stderr)               # refused: no test evidence
+        self.assertIn("tested-exit", r.stderr)                    # names the missing evidence flag
+        proj = st.reduce(self._rows())
+        self.assertEqual(proj["current_state"], "Approved")       # never reached Released
+        self.assertFalse(proj["release_token_active"])            # no token minted
+        self.assertFalse(any(row.get("kind") == "release_token" for row in self._rows()))
+
     # ---- flow-finish must match the OPENED flow (codex HIGH: no silent flow-type switch) ----
     def test_flow_finish_rejects_type_mismatch(self):
         self._cli("init", "--text", "x", "--mode", "enforce")

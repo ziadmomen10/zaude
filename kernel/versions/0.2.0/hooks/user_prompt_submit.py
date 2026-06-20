@@ -62,15 +62,20 @@ def main():
     except Exception:
         pass
 
-    # best-effort current lifecycle state (lets the router gate lifecycle commands by precondition)
+    # best-effort current lifecycle state (lets the router gate lifecycle commands by precondition).
+    # Routed lifecycle commands run against the ACTIVE work item (P4), so read current_state from the
+    # ACTIVE item's sub-trace when one is set, else the root (today's path). board.active_item_dir is
+    # TOTAL (None on ANY problem) — and the whole block is fail-open: any error -> current_state=None,
+    # which router.route already handles. Mirrors how hooks/pre_tool_use.py resolves the active item.
     current_state = None
     try:
         cwd = data.get("cwd") or os.getcwd()
         res = paths.resolve(cwd)
         if isinstance(res, dict) and res.get("status") == "onboarded":
-            from lib import trace, state as st
+            from lib import trace, state as st, board
             ctx = res["ctx"]
-            rows = trace.read_trace(ctx["zaude_dir"], ctx["root"], verify=False)
+            gate_dir = board.active_item_dir(ctx["zaude_dir"], ctx["root"]) or ctx["zaude_dir"]
+            rows = trace.read_trace(gate_dir, ctx["root"], verify=False)
             current_state = st.reduce(rows).get("current_state")
     except Exception:
         current_state = None
