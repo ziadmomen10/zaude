@@ -141,6 +141,178 @@ def cmd_classify_risk(args):
                    {"tier": args.tier}, extra_rows=[{"kind": "risk", "tier": args.tier}])
 
 
+# ---------------------------------------------------------------- task-typed adaptive flows
+# Approach B (engine-level collapse): a FLOW *labels* the canonical 14-state linear chain, marking
+# each stage applicable (real work) or n/a (recorded honestly, never silently skipped — the state
+# machine only permits the LINEAR forward walk, so even a "skipped" stage still transitions, it just
+# carries an honest {"na": True} artifact instead of a real object). A flow declares its `terminal`
+# state and whether it issues a release token there. `build` == today's behavior (the back-compat
+# anchor). The reducer ignores the {"kind":"flow"} marker (unknown kind) and validates every
+# transition is legal linear — so a flow run replays exactly like a hand-driven linear run. [Approach B]
+
+# The canonical chain, as (from, to, command, artifact). One row per legal linear transition; this
+# is the SUPERSET that _FAST_CHAIN + _SHIP_CHAIN + /ship walk. A flow's segment is a slice of this.
+_CANON_CHAIN = [
+    ("Intake", "Clarified", "/clarify", "requirements.json"),
+    ("Clarified", "Prioritized", "/prioritize", "priority.json"),
+    ("Prioritized", "Planned", "/plan", "plan.json"),
+    ("Planned", "Designed", "/design", "design.json"),
+    ("Designed", "RiskClassified", "/classify-risk", "risk.json"),
+    ("RiskClassified", "Approved", "/approve", "approval.json"),
+    ("Approved", "Implemented", "/implement", "impl.json"),
+    ("Implemented", "Tested", "/test", "test-results.json"),
+    ("Tested", "Reviewed", "/review", "review-ledger.json"),
+    ("Reviewed", "Verified", "/verify", "verification.json"),
+    ("Verified", "Shippable", "/shippable", "shippable.json"),
+    ("Shippable", "Released", "/ship", "release.json"),
+]
+
+DEFAULT_FLOW = "build"
+
+# FLOWS labels each TARGET state of the canonical chain applicable vs n/a, names the role of each
+# applicable driven stage, and declares the terminal + whether the terminal issues a release token.
+#   applicable : {target_state: "role-label"} — stages that carry REAL work for this task type.
+#   terminal   : the state the flow ends at (closing segment drives here).
+#   release    : True => the terminal is "Released" and a deploy token is issued (with the evidence
+#                gate); False => a "Reviewed"-class terminal that NEVER issues a release token.
+#   open_to    : the state the OPENING segment (/flow) drives to — the first real-work state.
+# Any target state NOT in `applicable` (but at or before `terminal`) is recorded n/a: honest
+# {"na": True} artifact, same transition row shape, legal linear transition.
+FLOWS = {
+    # build: all stages applicable; terminal Released. == today's behavior (back-compat anchor).
+    "build": {
+        "applicable": {
+            "Clarified": "clarify", "Prioritized": "prioritize", "Planned": "plan",
+            "Designed": "design", "RiskClassified": "classify-risk", "Approved": "approve",
+            "Implemented": "implement", "Tested": "test", "Reviewed": "review",
+            "Verified": "verify", "Shippable": "shippable", "Released": "ship",
+        },
+        "terminal": "Released", "release": True, "open_to": "Approved",
+    },
+    # bugfix: reproduce -> fix -> test -> review -> verify. Prioritized/Planned/Designed/Shippable n/a.
+    "bugfix": {
+        "applicable": {
+            "Clarified": "reproduce", "Implemented": "fix", "Tested": "test",
+            "Reviewed": "review", "Verified": "verify", "Released": "ship",
+        },
+        "terminal": "Released", "release": True, "open_to": "Approved",
+    },
+    # audit: scope -> investigate -> report (recorded at Implemented/Tested/Reviewed). Terminal
+    # Reviewed; NO release token ever. Prioritized/Planned/Designed/Shippable n/a.
+    "audit": {
+        "applicable": {
+            "Clarified": "scope", "Implemented": "investigate", "Tested": "evidence",
+            "Reviewed": "report",
+        },
+        "terminal": "Reviewed", "release": False, "open_to": "Approved",
+    },
+    # research: like audit; terminal Reviewed; no code evidence required (the driven artifacts are
+    # notes/findings, not test exit codes). No release token.
+    "research": {
+        "applicable": {
+            "Clarified": "question", "Implemented": "investigate", "Tested": "findings",
+            "Reviewed": "report",
+        },
+        "terminal": "Reviewed", "release": False, "open_to": "Approved",
+    },
+    # grooming: intake -> dedupe/rank -> publish (recorded at Implemented/Tested/Reviewed). Terminal
+    # Reviewed; no release token.
+    "grooming": {
+        "applicable": {
+            "Clarified": "intake", "Implemented": "dedupe", "Tested": "rank", "Reviewed": "publish",
+        },
+        "terminal": "Reviewed", "release": False, "open_to": "Approved",
+    },
+}
+
+
+def _state_index(s):
+    return st.STATES.index(s)
+
+
+def active_flow(zd, root):
+    """The flow currently in effect = the name on the LAST {"kind":"flow"} marker row, or
+    DEFAULT_FLOW when none has ever been recorded (an OLD linear trace is therefore identical to a
+    `build` flow). Read-only; presentation/projection helpers use this. [flow-aware, no-flow=today]"""
+    try:
+        rows = trace.read_trace(zd, root, verify=True)
+    except Exception:
+        return DEFAULT_FLOW
+    name = DEFAULT_FLOW
+    for r in rows:
+        if r.get("kind") == "flow" and r.get("name") in FLOWS:
+            name = r["name"]
+    return name
+
+
+def _flow_segment_rows(flow, start, end):
+    """The slice of _CANON_CHAIN whose transitions move start -> end (inclusive of the edge that
+    LANDS on `end`). Returns the list of (frm, to, cmd, artifact). Empty if start == end."""
+    si, ei = _state_index(start), _state_index(end)
+    return [step for step in _CANON_CHAIN
+            if si <= _state_index(step[0]) and _state_index(step[1]) <= ei]
+
+
+def run_flow_segment(zd, root, flow, start, end, driven=None, marker_extra=None,
+                     pre_rows=None, post_rows=None):
+    """Atomically record one flow segment start -> end as a single locked collapse (generalizes
+    cmd_fast). ONE lock; re-read+verify the trace and assert current_state == start (fail-closed
+    like cmd_fast); append ONE {"kind":"flow", "name":flow, ...} marker (reduce() ignores it); then
+    for each canonical transition in the slice write its artifact ({"na":True,"flow":flow} for n/a
+    stages, the driver's real object for an applicable/driven stage) and append the SAME transition
+    row shape cmd_fast emits, adding "flow" and "na" keys. ONE _refresh_state. Lock released in
+    finally — never a half-written trace. Returns (rc, steps) where steps is the recorded slice.
+
+    `driven` maps a target state -> the real artifact object to write for that applicable stage; a
+    target NOT in `driven` is recorded n/a. `marker_extra` merges into the flow marker row.
+    `pre_rows`/`post_rows` are extra non-transition trace rows (e.g. a `risk` row before the segment,
+    a `release_token` row after) appended inside the SAME lock so the collapse stays atomic.
+    """
+    spec = FLOWS[flow]
+    steps = _flow_segment_rows(flow, start, end)
+    driven = driven or {}
+    lp = trace.acquire_lock(zd)
+    try:
+        cur = st.reduce(trace.read_trace(zd, root, verify=True))["current_state"]
+        if cur != start:
+            sys.stderr.write("refused: flow '%s' segment starts at %s (state=%s)\n"
+                             % (flow, start, cur))
+            return 3, []
+        # every transition in the slice MUST be legal linear (defensive — the slice is built from
+        # _CANON_CHAIN which is exactly the linear chain, but assert it so a future edit can't sneak
+        # an illegal edge past the reducer's validating replay).
+        for frm, to, _cmd, _art in steps:
+            if not st.can_transition(frm, to):
+                sys.stderr.write("refused: flow '%s' has illegal transition %s -> %s\n"
+                                 % (flow, frm, to))
+                return 3, []
+        marker = {"kind": "flow", "name": flow, "segment": "%s->%s" % (start, end),
+                  "terminal": spec["terminal"]}
+        marker.update(marker_extra or {})
+        trace.append_row(zd, marker, root)
+        for r in (pre_rows or []):
+            trace.append_row(zd, r, root)
+        applicable = spec["applicable"]
+        for frm, to, cmd, art in steps:
+            is_applicable = to in applicable
+            if to in driven:
+                obj = driven[to]
+            elif is_applicable:
+                obj = {"flow": flow, "stage": applicable[to]}
+            else:
+                obj = {"na": True, "flow": flow}
+            _write_artifact(zd, art, obj)
+            trace.append_row(zd, {"kind": "transition", "from": frm, "to": to,
+                                  "command": cmd, "artifact": art,
+                                  "flow": flow, "na": (not is_applicable)}, root)
+        for r in (post_rows or []):
+            trace.append_row(zd, r, root)
+        _refresh_state(zd, root)
+    finally:
+        trace.release_lock(lp)
+    return 0, steps
+
+
 _FAST_CHAIN = [("Intake", "Clarified", "/clarify", "requirements.json"),
                ("Clarified", "Prioritized", "/prioritize", "priority.json"),
                ("Prioritized", "Planned", "/plan", "plan.json"),
@@ -217,6 +389,99 @@ def cmd_fast_ship(args):
         trace.release_lock(lp)
     print("fast-ship (%s): Approved -> Released. tests passed (exit 0); deploy token issued."
           % (proj.get("risk_tier") or "low"))
+    return 0
+
+
+def cmd_flow(args):
+    """OPEN a task-typed adaptive flow (Approach B). Records the flow's OPENING segment Intake ->
+    first real-work state (open_to) as ONE atomic locked collapse: n/a stages for this task type are
+    recorded honestly ({"na":True}); applicable stages get a real driven artifact. Refuses high-risk
+    (T3/T4) like /fast (a flow is the light, task-shaped lane; high-risk uses the full chain).
+    Unknown --type => clean rc-3 refusal, no lock taken, no partial write. [Approach B]"""
+    zd, root = _resolve(args)
+    flow = args.type
+    if flow not in FLOWS:
+        sys.stderr.write("refused: unknown flow type '%s' (known: %s)\n"
+                         % (flow, ", ".join(sorted(FLOWS)))); return 3
+    if args.tier in gates.HIGH_RISK:
+        sys.stderr.write("refused: flows are the light task-shaped lane (low/medium risk); %s needs "
+                         "the full chain (/design -> /classify-risk -> /approve).\n" % args.tier)
+        return 3
+    spec = FLOWS[flow]
+    # the opening segment passes through RiskClassified -> record the tier so the projection's
+    # risk_tier is set (mirrors cmd_fast's risk row), and drive the Clarified stage with the note.
+    driven = {"Clarified": {"flow": flow, "stage": spec["applicable"].get("Clarified", "open"),
+                            "note": args.note}}
+    rc, steps = run_flow_segment(zd, root, flow, "Intake", spec["open_to"], driven=driven,
+                                 marker_extra={"phase": "open", "note": args.note,
+                                               "tier": args.tier},
+                                 pre_rows=[{"kind": "risk", "tier": args.tier}])
+    if rc != 0:
+        return rc
+    na = [to for (_f, to, _c, _a) in steps if to not in spec["applicable"]]
+    print("flow '%s' (%s): Intake -> %s — work unblocked. n/a stages recorded honestly: %s. '%s'"
+          % (flow, args.tier, spec["open_to"], ", ".join(na) or "(none)", args.note))
+    return 0
+
+
+def cmd_flow_finish(args):
+    """CLOSE a task-typed adaptive flow (Approach B). Records the CLOSING segment from the current
+    state to the flow's terminal as ONE atomic locked collapse. For a terminal=="Released" flow this
+    KEEPS cmd_fast_ship's evidence gate — it REFUSES on a non-zero --tested-exit and issues a release
+    token at Released. For a terminal=="Reviewed" flow (audit/research/grooming) it issues NO release
+    token ever (the work is investigation/grooming, not a deploy). Unknown --type => clean rc-3
+    refusal, no lock taken, no partial write. [Approach B]"""
+    zd, root = _resolve(args)
+    flow = args.type
+    if flow not in FLOWS:
+        sys.stderr.write("refused: unknown flow type '%s' (known: %s)\n"
+                         % (flow, ", ".join(sorted(FLOWS)))); return 3
+    # flow-finish CLOSES a flow OPENED by /flow. Require an explicit open marker: active_flow()
+    # defaults to "build" on a no-flow trace, which would otherwise let `flow-finish --type build`
+    # collapse Intake->Released (token) bypassing /flow's opening + tier check. [codex review HIGH]
+    if not any(r.get("kind") == "flow" and r.get("phase") == "open"
+               for r in trace.read_trace(zd, root, verify=True)):
+        sys.stderr.write("refused: no open flow — run `/zflow --type <type>` first "
+                         "(flow-finish only closes a flow opened by /zflow).\n"); return 3
+    # bind finish to the flow that was actually OPENED — never let --type silently switch the flow
+    # type at finish (e.g. open audit [no token] then finish as bugfix [token]). [codex review HIGH]
+    opened = active_flow(zd, root)
+    if flow != opened:
+        sys.stderr.write("refused: flow-finish --type %s but the OPEN flow is '%s' — finish the "
+                         "flow you opened: flow-finish --type %s.\n" % (flow, opened, opened))
+        return 3
+    spec = FLOWS[flow]
+    terminal = spec["terminal"]
+    proj = st.reduce(trace.read_trace(zd, root, verify=True))
+    if proj.get("risk_tier") in gates.HIGH_RISK:
+        sys.stderr.write("refused: flows are low/medium only; %s needs the full chain.\n"
+                         % proj.get("risk_tier")); return 3
+    start = proj["current_state"]
+    if _state_index(start) >= _state_index(terminal):
+        sys.stderr.write("refused: flow '%s' already at/after its terminal %s (state=%s)\n"
+                         % (flow, terminal, start)); return 3
+    # EVIDENCE GATE — only for a release-issuing terminal (Released): a non-zero tested-exit REFUSES
+    # before any write, exactly like cmd_fast_ship. Reviewed-terminal flows have no code-evidence
+    # gate (research needs no exit code; audit/grooming record findings, not a green test run).
+    driven = {}
+    post = None
+    if spec["release"]:
+        if int(args.tested_exit) != 0:
+            sys.stderr.write("refused: tests did not pass (exit %s) — flow-finish will not ship "
+                             "broken code.\n" % args.tested_exit); return 3
+        driven = {"Tested": {"cmd": args.tested_cmd, "exit": 0},
+                  "Released": {"deploy_id": args.deploy_id, "flow": flow}}
+        post = [{"kind": "release_token", "expires_at": time.time() + 3600, "scope": "deploy"}]
+    rc, steps = run_flow_segment(zd, root, flow, start, terminal, driven=driven,
+                                 marker_extra={"phase": "finish"}, post_rows=post)
+    if rc != 0:
+        return rc
+    if spec["release"]:
+        print("flow '%s': %s -> %s. tests passed (exit 0); deploy token issued."
+              % (flow, start, terminal))
+    else:
+        print("flow '%s': %s -> %s. NO release token (review/investigation terminal)."
+              % (flow, start, terminal))
     return 0
 
 
@@ -395,24 +660,41 @@ def cmd_board(args):
 
 
 def cmd_dod(args):
-    """Definition-of-Done / autonomous-loop end-condition. DoD = the work reached Released/Closed
-    WITH real evidence (passing tests + verification) AND the intake column is empty. This is
-    'tier-4 as DoD' — the loop stops on real done-with-evidence, NOT on 'looks healthy'. Exit 0 =
-    DoD met (loop may stop); exit 2 = keep the loop running. [Deen: tier-4=DoD, loop end-condition]"""
+    """Definition-of-Done / autonomous-loop end-condition. DoD = the work reached its flow's TERMINAL
+    WITH real evidence (passing tests + verification — but ONLY the evidence the flow marks
+    applicable) AND the intake column is empty. This is 'tier-4 as DoD' — the loop stops on real
+    done-with-evidence, NOT on 'looks healthy'. For build/bugfix (terminal Released) the condition is
+    unchanged. A no-flow (old linear) trace defaults to `build` => EXACT current behavior. Exit 0 =
+    DoD met (loop may stop); exit 2 = keep the loop running. [Deen: tier-4=DoD; terminal-aware]"""
     zd, root = _resolve(args)
     proj = st.reduce(trace.read_trace(zd, root, verify=True))
     arts = set(proj["artifacts"])
     cur = proj["current_state"]
+    flow = active_flow(zd, root)
+    spec = FLOWS.get(flow, FLOWS[DEFAULT_FLOW])
+    terminal = spec.get("terminal", "Released")
+    applicable = spec.get("applicable", {})
     has_verify = "verification.json" in arts
     has_tests = "test-results.json" in arts
-    done_state = cur in ("Released", "Closed")
+    # Evidence is required ONLY for stages this flow marks applicable. For build (all applicable)
+    # this is exactly today's "tests + verification". For Reviewed-terminal flows, Verified is n/a,
+    # so verification evidence is not demanded (and is reported as not-applicable).
+    need_tests = "Tested" in applicable
+    need_verify = "Verified" in applicable
+    tests_ok = has_tests if need_tests else True
+    verify_ok = has_verify if need_verify else True
+    # `Released`/`Closed` keep their special standing for a release flow; for a Reviewed-terminal
+    # flow, reaching the terminal IS done.
+    done_state = _state_index(cur) >= _state_index(terminal)
     open_intake = len(_board(zd, root)["intake"])
-    dod = done_state and has_verify and has_tests and open_intake == 0
+    dod = done_state and tests_ok and verify_ok and open_intake == 0
     print(json.dumps({
         "dod_met": dod,
+        "flow": flow,
+        "terminal": terminal,
         "lifecycle_state": cur,
         "has_passing_tests": has_tests,
-        "has_verification_evidence": has_verify,
+        "has_verification_evidence": (has_verify if need_verify else "n/a"),
         "open_intake_items": open_intake,
         "loop_should_continue": not dod,
         "verdict": "DoD MET — tier-4 done with evidence; loop may stop"
@@ -871,25 +1153,56 @@ _NEXT_COMMAND = {
 }
 
 
+def _next_command_for_flow(cur, flow):
+    """PRESENTATION-ONLY flow-awareness for /next: the next legal command from `cur`, but for a
+    non-build flow SKIP the n/a stages and stop at the flow's terminal. `_NEXT_COMMAND` itself is
+    unchanged — this only walks it. A no-flow / build trace gives the IDENTICAL answer as before
+    (build short-circuits to exactly today's logic). Returns (next_command, done)."""
+    if flow == DEFAULT_FLOW:                       # build == today, byte-for-byte: no skipping
+        return _NEXT_COMMAND.get(cur), cur in ("Released", "Closed")
+    spec = FLOWS.get(flow, FLOWS[DEFAULT_FLOW])
+    terminal = spec.get("terminal", "Released")
+    applicable = spec.get("applicable", {})
+    # Done when we've reached (or passed) the flow's terminal.
+    if _state_index(cur) >= _state_index(terminal):
+        return None, True
+    # Walk the linear chain forward from `cur`; the next command is the one that LANDS on the next
+    # applicable target (n/a targets are skipped in presentation), stopping at the terminal.
+    s = cur
+    while s is not None and _state_index(s) < _state_index(terminal):
+        nxt = _NEXT_COMMAND.get(s)
+        nxt_states = st.next_states(s)
+        to = nxt_states[0] if nxt_states else None
+        if to is None:
+            return None, True
+        if to in applicable or to == terminal:
+            return nxt, False
+        s = to
+    return None, True
+
+
 def cmd_next(args):
     """Autonomous helper (finding #1): print the next lifecycle command for the current state, or
     DoD when done — so a driver can loop until DoD without a hardcoded sequence. Read-only; exit 0.
-    (Low/medium-risk work may instead collapse the chain via /fast + /fast-ship.)"""
+    Flow-aware PRESENTATION: if a non-build flow is active in the trace it skips that flow's n/a
+    stages when printing the next command (a no-flow trace is identical to today). [Approach B]
+    (Low/medium-risk work may instead collapse the chain via /fast + /fast-ship or /flow.)"""
     zd, root = _resolve(args)
     proj = _projection_out(zd, root)
     cur = proj["current_state"]
-    done = cur in ("Released", "Closed")
-    nxt = _NEXT_COMMAND.get(cur)
+    flow = active_flow(zd, root)
+    nxt, done = _next_command_for_flow(cur, flow)
     out = {"current_state": cur, "next_command": nxt, "dod_reached": done,
-           "risk_tier": proj.get("risk_tier")}
+           "risk_tier": proj.get("risk_tier"), "flow": flow}
     if getattr(args, "as_json", False):
         print(json.dumps(out))
         return 0
     if done:
-        print("DoD path: state=%s — run /dod to confirm done-with-evidence%s."
-              % (cur, "" if cur == "Closed" else ", then /close"))
+        print("DoD path: state=%s (flow=%s) — run /dod to confirm done-with-evidence%s."
+              % (cur, flow, "" if cur == "Closed" else ", then /close"))
     else:
-        print("next: %s   (state=%s, risk=%s)" % (nxt, cur, proj.get("risk_tier") or "unclassified"))
+        print("next: %s   (state=%s, flow=%s, risk=%s)"
+              % (nxt, cur, flow, proj.get("risk_tier") or "unclassified"))
     return 0
 
 
@@ -1407,6 +1720,17 @@ def main(argv=None):
     sp = sub.add_parser("fast-ship"); sp.add_argument("--tested-cmd", dest="tested_cmd", default="tests")
     sp.add_argument("--tested-exit", dest="tested_exit", required=True)
     sp.add_argument("--deploy-id", dest="deploy_id", default="d1"); sp.set_defaults(fn=cmd_fast_ship)
+
+    # task-typed adaptive flows (Approach B): /flow opens, /flow-finish closes. Mirrors fast/fast-ship.
+    sp = sub.add_parser("flow"); sp.add_argument("--type", required=True)
+    sp.add_argument("--note", required=True); sp.add_argument("--tier", default="T1")
+    sp.set_defaults(fn=cmd_flow)
+
+    sp = sub.add_parser("flow-finish"); sp.add_argument("--type", required=True)
+    sp.add_argument("--tested-cmd", dest="tested_cmd", default="tests")
+    sp.add_argument("--tested-exit", dest="tested_exit", default="0")
+    sp.add_argument("--deploy-id", dest="deploy_id", default="d1")
+    sp.set_defaults(fn=cmd_flow_finish)
 
     sp = sub.add_parser("approve"); sp.add_argument("--by", required=True)
     sp.add_argument("--scope", default="work")

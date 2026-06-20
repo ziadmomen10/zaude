@@ -781,5 +781,270 @@ class OpenCodeGracefulTests(TmpCase):
         self.assertEqual(r.returncode, 0)
         self.assertIn("status", json.loads(r.stdout))
 
+
+class AdaptiveFlowsTests(TmpCase):
+    """Task-typed adaptive flows (Approach B, engine-level collapse). The invariants under lock:
+    n/a stages are recorded HONESTLY (never silently skipped), every flow transition is a legal
+    linear can_transition, the {"kind":"flow"} marker is ignored by the reducer, build is
+    behavior-identical to today, Reviewed-terminal flows NEVER issue a release token, the evidence
+    gate survives for Released-terminal flows, and an OLD (no-flow) trace replays unchanged."""
+    import argparse as _ap
+
+    def _cli(self, *a):
+        return subprocess.run([sys.executable, os.path.join(VROOT, "cli.py"), "--path", self.tmp]
+                              + list(a), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def _rows(self):
+        return trace.read_trace(os.path.join(self.tmp, ".zaude"), self.root, verify=True)
+
+    def _artifact(self, name):
+        with open(os.path.join(self.tmp, ".zaude", "artifacts", name), encoding="utf-8") as f:
+            return json.load(f)
+
+    # ---- bugfix: workable state in ONE command, n/a honesty ----
+    def test_bugfix_reaches_workable_state_in_one_command(self):
+        self.assertEqual(self._cli("init", "--text", "crash", "--mode", "enforce").returncode, 0)
+        r = self._cli("flow", "--type", "bugfix", "--note", "repro: 500 on empty pw")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        proj = st.reduce(self._rows())
+        self.assertEqual(proj["current_state"], "Approved")    # coding is unblocked in one step
+        self.assertEqual(proj["risk_tier"], "T1")              # opening recorded the tier
+
+    def test_na_stages_recorded_honestly(self):
+        self._cli("init", "--text", "crash", "--mode", "enforce")
+        self._cli("flow", "--type", "bugfix", "--note", "x")
+        # bugfix marks Prioritized/Planned/Designed n/a -> their artifacts carry {"na": True}
+        for art in ("priority.json", "plan.json", "design.json"):
+            self.assertEqual(self._artifact(art).get("na"), True, art)
+        # an APPLICABLE stage (Clarified=reproduce) is NOT n/a — it carries the real note
+        self.assertNotEqual(self._artifact("requirements.json").get("na"), True)
+        self.assertEqual(self._artifact("requirements.json").get("note"), "x")
+        # the n/a flag is also honest on the transition rows themselves
+        na_rows = {r["to"]: r.get("na") for r in self._rows() if r.get("kind") == "transition"}
+        self.assertTrue(na_rows["Prioritized"])                # n/a
+        self.assertFalse(na_rows["Clarified"])                 # applicable
+
+    def test_flow_marker_ignored_by_reducer(self):
+        # the {"kind":"flow"} marker is an UNKNOWN kind to reduce() -> it must not affect the fold,
+        # and the projection must equal a reduce() over the SAME rows with the markers stripped.
+        self._cli("init", "--text", "x", "--mode", "enforce")
+        self._cli("flow", "--type", "bugfix", "--note", "x")
+        rows = self._rows()
+        self.assertTrue(any(r.get("kind") == "flow" for r in rows))   # marker really is present
+        with_marker = st.reduce(rows)
+        without = st.reduce([r for r in rows if r.get("kind") != "flow"])
+        self.assertEqual(with_marker["current_state"], without["current_state"])
+        self.assertEqual(with_marker["artifacts"], without["artifacts"])
+        self.assertEqual(with_marker["risk_tier"], without["risk_tier"])
+
+    def test_all_flow_transitions_are_legal_linear(self):
+        # a full bugfix run (open + finish) must produce ONLY legal linear can_transition edges, and
+        # the validating reducer must accept the whole trace.
+        self._cli("init", "--text", "x", "--mode", "enforce")
+        self._cli("flow", "--type", "bugfix", "--note", "x")
+        self._cli("flow-finish", "--type", "bugfix", "--tested-exit", "0")
+        rows = self._rows()
+        for r in rows:
+            if r.get("kind") == "transition":
+                self.assertTrue(st.can_transition(r["from"], r["to"]),
+                                "illegal %s->%s" % (r["from"], r["to"]))
+        st.reduce(rows)   # validating replay must not raise
+        self.assertEqual(st.reduce(rows)["current_state"], "Released")
+
+    def test_trace_verify_passes_after_a_flow_run(self):
+        self._cli("init", "--text", "x", "--mode", "enforce")
+        self._cli("flow", "--type", "audit", "--note", "scope: auth")
+        self._cli("flow-finish", "--type", "audit")
+        r = self._cli("trace-verify")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Reviewed", r.stdout)
+
+    # ---- build behavior-identical to today ----
+    def test_build_flow_behavior_identical(self):
+        # build marks every stage applicable; opening drives Intake->Approved with NO n/a stages,
+        # finishing drives Approved->Released with a token — exactly the fast+fast-ship outcome.
+        self._cli("init", "--text", "feat", "--mode", "enforce")
+        self.assertEqual(self._cli("flow", "--type", "build", "--note", "feat").returncode, 0)
+        nas = [r["to"] for r in self._rows() if r.get("kind") == "transition" and r.get("na")]
+        self.assertEqual(nas, [])                              # build skips nothing
+        self.assertEqual(self._cli("flow-finish", "--type", "build", "--tested-exit", "0").returncode, 0)
+        proj = st.reduce(self._rows())
+        self.assertEqual(proj["current_state"], "Released")
+        self.assertTrue(proj["release_token_active"])          # build is a release flow
+
+    def test_build_flow_dod_matches_today(self):
+        # /dod on a build flow reports the same evidence keys (bool, not n/a) and terminal Released.
+        self._cli("init", "--text", "feat", "--mode", "enforce")
+        self._cli("flow", "--type", "build", "--note", "feat")
+        self._cli("flow-finish", "--type", "build", "--tested-exit", "0")
+        r = self._cli("dod")
+        self.assertEqual(r.returncode, 0)
+        d = json.loads(r.stdout)
+        self.assertTrue(d["dod_met"])
+        self.assertEqual(d["terminal"], "Released")
+        self.assertIs(d["has_verification_evidence"], True)   # verify applicable -> a real bool
+
+    # ---- audit: NO release token + DoD terminal Reviewed ----
+    def test_audit_flow_has_no_release_token_and_dod_terminal_reviewed(self):
+        self._cli("init", "--text", "audit auth", "--mode", "enforce")
+        self._cli("flow", "--type", "audit", "--note", "scope: sessions")
+        r = self._cli("flow-finish", "--type", "audit")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        proj = st.reduce(self._rows())
+        self.assertEqual(proj["current_state"], "Reviewed")    # terminal Reviewed
+        self.assertFalse(proj["release_token_active"])         # NO token ever
+        # no release_token row was ever appended for an audit flow
+        self.assertFalse(any(r.get("kind") == "release_token" for r in self._rows()))
+        d = json.loads(self._cli("dod").stdout)
+        self.assertEqual(d["terminal"], "Reviewed")
+        self.assertTrue(d["dod_met"])                          # done at Reviewed
+        self.assertEqual(d["has_verification_evidence"], "n/a")   # Verified is n/a for audit
+
+    def test_research_flow_terminal_reviewed_no_token(self):
+        self._cli("init", "--text", "spike", "--mode", "enforce")
+        self._cli("flow", "--type", "research", "--note", "question: which cache")
+        self.assertEqual(self._cli("flow-finish", "--type", "research").returncode, 0)
+        proj = st.reduce(self._rows())
+        self.assertEqual(proj["current_state"], "Reviewed")
+        self.assertFalse(proj["release_token_active"])
+
+    def test_grooming_flow_terminal_reviewed_no_token(self):
+        self._cli("init", "--text", "groom", "--mode", "enforce")
+        self._cli("flow", "--type", "grooming", "--note", "intake: Q3 backlog")
+        self.assertEqual(self._cli("flow-finish", "--type", "grooming").returncode, 0)
+        proj = st.reduce(self._rows())
+        self.assertEqual(proj["current_state"], "Reviewed")
+        self.assertFalse(proj["release_token_active"])
+
+    # ---- flow-finish keeps the evidence gate for Released flows ----
+    def test_flow_finish_evidence_gate_for_released_flows(self):
+        self._cli("init", "--text", "bug", "--mode", "enforce")
+        self._cli("flow", "--type", "bugfix", "--note", "x")
+        # tested-exit 1 must REFUSE (never ship broken) and write NOTHING (state stays Approved)
+        r = self._cli("flow-finish", "--type", "bugfix", "--tested-exit", "1")
+        self.assertEqual(r.returncode, 3)
+        self.assertEqual(st.reduce(self._rows())["current_state"], "Approved")
+        # tested-exit 0 ships
+        r2 = self._cli("flow-finish", "--type", "bugfix", "--tested-exit", "0")
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        proj = st.reduce(self._rows())
+        self.assertEqual(proj["current_state"], "Released")
+        self.assertTrue(proj["release_token_active"])
+
+    # ---- flow-finish must match the OPENED flow (codex HIGH: no silent flow-type switch) ----
+    def test_flow_finish_rejects_type_mismatch(self):
+        self._cli("init", "--text", "x", "--mode", "enforce")
+        self._cli("flow", "--type", "audit", "--note", "scope")   # audit = no-token, terminal Reviewed
+        r = self._cli("flow-finish", "--type", "bugfix", "--tested-exit", "0")  # wrong type
+        self.assertEqual(r.returncode, 3)
+        proj = st.reduce(self._rows())
+        self.assertFalse(proj["release_token_active"])             # no token from the mismatched finish
+        self.assertNotEqual(proj["current_state"], "Released")
+        self.assertFalse(any(row.get("kind") == "release_token" for row in self._rows()))
+
+    # ---- flow-finish requires an OPENED flow (codex HIGH: no-flow trace must not collapse) ----
+    def test_flow_finish_requires_open_flow(self):
+        self._cli("init", "--text", "x", "--mode", "enforce")
+        # no /flow opened -> flow-finish --type build must NOT collapse Intake->Released
+        r = self._cli("flow-finish", "--type", "build", "--tested-exit", "0")
+        self.assertEqual(r.returncode, 3)
+        proj = st.reduce(self._rows())
+        self.assertEqual(proj["current_state"], "Intake")        # nothing collapsed
+        self.assertFalse(proj["release_token_active"])           # no token issued
+
+    # ---- flow refuses high-risk ----
+    def test_flow_refuses_high_risk(self):
+        self._cli("init", "--text", "x", "--mode", "enforce")
+        for tier in ("T3", "T4"):
+            r = self._cli("flow", "--type", "bugfix", "--note", "x", "--tier", tier)
+            self.assertEqual(r.returncode, 3, tier)
+            self.assertEqual(st.reduce(self._rows())["current_state"], "Intake")   # no partial write
+
+    # ---- next is flow-aware (skips n/a) ----
+    def test_next_is_flow_aware_skips_na(self):
+        self._cli("init", "--text", "x", "--mode", "enforce")
+        self._cli("flow", "--type", "audit", "--note", "scope: x")
+        # at Approved, the next APPLICABLE audit stage is Implemented (=investigate) -> /implement
+        d = json.loads(self._cli("next", "--json").stdout)
+        self.assertEqual(d["flow"], "audit")
+        self.assertEqual(d["next_command"], "/implement")
+        self.assertFalse(d["dod_reached"])
+        # drive to the terminal; /next then reports done (terminal-aware, no next command)
+        self._cli("flow-finish", "--type", "audit")
+        d2 = json.loads(self._cli("next", "--json").stdout)
+        self.assertTrue(d2["dod_reached"])
+        self.assertIsNone(d2["next_command"])
+
+    def test_next_unit_skips_na_for_research_flow(self):
+        import cli
+        # research marks Tested applicable, Verified n/a, terminal Reviewed: from Tested, /next must
+        # point to /review (skip-stop logic is presentation only; _NEXT_COMMAND is unchanged).
+        self.assertEqual(cli._NEXT_COMMAND["Tested"], "/review")
+        self.assertEqual(cli._next_command_for_flow("Tested", "research"), ("/review", False))
+        # from Reviewed (the research terminal) it is done
+        self.assertEqual(cli._next_command_for_flow("Reviewed", "research"), (None, True))
+
+    # ---- unknown flow type => clean refusal ----
+    def test_unknown_flow_type_clean_refusal(self):
+        self._cli("init", "--text", "x", "--mode", "enforce")
+        before = len(self._rows())
+        r = self._cli("flow", "--type", "nope", "--note", "x")
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("unknown flow type", r.stderr)
+        self.assertEqual(len(self._rows()), before)            # nothing written, no lock fallout
+        r2 = self._cli("flow-finish", "--type", "nope")
+        self.assertEqual(r2.returncode, 3)
+        self.assertEqual(len(self._rows()), before)
+
+    # ---- an OLD linear trace (no flow rows) still replays unchanged ----
+    def test_old_linear_trace_replays_unchanged(self):
+        # build a trace the classic way: NO /flow command, just the linear lifecycle commands.
+        self.assertEqual(self._cli("init", "--text", "x", "--mode", "enforce").returncode, 0)
+        for cmd in (["clarify", "--acceptance", "a"], ["prioritize", "--decision", "d"],
+                    ["plan", "--steps", "a"], ["design", "--approach", "x", "--decision", "D"],
+                    ["classify-risk", "--tier", "T1"], ["approve", "--by", "op"], ["implement"],
+                    ["test", "--cmd", "t", "--exit", "0"]):
+            self.assertEqual(self._cli(*cmd).returncode, 0, cmd)
+        rows = self._rows()
+        self.assertFalse(any(r.get("kind") == "flow" for r in rows))   # truly no flow rows
+        # active_flow defaults to build; /next behaves byte-for-byte as today (no skipping)
+        import cli
+        self.assertEqual(cli.active_flow(os.path.join(self.tmp, ".zaude"), self.root), "build")
+        d = json.loads(self._cli("next", "--json").stdout)
+        self.assertEqual(d["current_state"], "Tested")
+        self.assertEqual(d["next_command"], "/review")          # exactly _NEXT_COMMAND["Tested"]
+        self.assertFalse(d["dod_reached"])
+        # trace integrity unaffected
+        self.assertEqual(self._cli("trace-verify").returncode, 0)
+
+    def test_old_trace_dod_unchanged_at_released(self):
+        # an old linear trace driven all the way to Released: /dod must report terminal Released and
+        # bool verification evidence (the exact pre-flow contract).
+        self.assertEqual(self._cli("init", "--text", "x", "--mode", "enforce").returncode, 0)
+        for cmd in (["clarify", "--acceptance", "a"], ["prioritize", "--decision", "d"],
+                    ["plan", "--steps", "a"], ["design", "--approach", "x", "--decision", "D"],
+                    ["classify-risk", "--tier", "T1"], ["approve", "--by", "op"], ["implement"],
+                    ["test", "--cmd", "t", "--exit", "0"], ["review", "--unresolved", "0"],
+                    ["verify"], ["shippable"], ["ship", "--deploy-id", "d1"]):
+            self.assertEqual(self._cli(*cmd).returncode, 0, cmd)
+        d = json.loads(self._cli("dod").stdout)
+        self.assertEqual(d["flow"], "build")
+        self.assertEqual(d["terminal"], "Released")
+        self.assertIs(d["has_verification_evidence"], True)
+        self.assertTrue(d["dod_met"])
+
+    # ---- policy declares the flow commands ----
+    def test_flow_commands_in_policy(self):
+        with open(_POLICY, encoding="utf-8") as f:
+            pol = json.load(f)
+        by_name = {c["name"]: c for c in pol["commands"]}
+        self.assertIn("flow", by_name)
+        self.assertIn("flow-finish", by_name)
+        self.assertEqual(by_name["flow"]["group"], "flows")
+        self.assertEqual(by_name["flow-finish"]["group"], "flows")
+        self.assertTrue(by_name["flow"]["body"].strip())          # per-type agent-driving body
+        self.assertTrue(by_name["flow-finish"]["body"].strip())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
