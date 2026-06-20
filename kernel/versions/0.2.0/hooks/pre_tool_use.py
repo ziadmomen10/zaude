@@ -121,8 +121,23 @@ def main():
         tinput = {}
     target = tinput.get("file_path") or tinput.get("notebook_path") or ""
 
+    # P4: gate against the ACTIVE work item's single-track sub-trace if one is set, else the root
+    # trace (today's path). active_item_dir() is TOTAL — None on ANY problem (no items dir, no active
+    # item, set-but-missing dir, error) -> root projection = byte-identical to today. The PROJECTION
+    # comes from the active item; gates.evaluate still receives the ROOT zaude_dir (so protect_zaude /
+    # _under still protect ALL of .zaude/, including items/). A forged ACTIVE sub-trace raises
+    # TraceForged here exactly like a forged root -> fail-closed in enforce. [P4 Approach A]
+    #
+    # ISOLATE the board hop off the gate's critical path: board.py is NOT trusted to keep the gate
+    # alive. A broken/throwing `import board` or active_item_dir() must NEVER disable the gate — on
+    # ANY failure fall back to the ROOT trace (today's path), which still enforces. [safety]
     try:
-        rows = trace.read_trace(zaude_dir, root, verify=True)
+        from lib import board
+        gate_dir = board.active_item_dir(zaude_dir, root) or zaude_dir
+    except Exception:
+        gate_dir = zaude_dir
+    try:
+        rows = trace.read_trace(gate_dir, root, verify=True)
         proj_state = st.reduce(rows)
         decision, reason, gate = gates.evaluate(proj_state, tool, tinput, zaude_dir)
         cur = proj_state.get("current_state")

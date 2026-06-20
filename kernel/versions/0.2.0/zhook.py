@@ -14,6 +14,7 @@ import sys
 
 EVENTS = {
     "pre_tool_use": "hooks.pre_tool_use",
+    "user_prompt_submit": "hooks.user_prompt_submit",  # Zaude 3 P0: always-on intent front door
     # post_tool_use / session_start / session_end land here in Phase 2.
 }
 

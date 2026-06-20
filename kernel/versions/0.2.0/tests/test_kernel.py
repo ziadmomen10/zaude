@@ -421,8 +421,10 @@ class GeneratorTests(TmpCase):
         self.assertTrue(os.path.isfile(os.path.join(out, "commands", "ship.md")))
         self.assertTrue(os.path.isfile(os.path.join(out, "agents", "evidence-verifier.md")))
         hb = json.load(open(os.path.join(out, "hook-block.json")))
-        self.assertIn("Edit", hb["matcher"])
-        self.assertIn("zhook.py", hb["hooks"][0]["command"])
+        self.assertIn("Edit", hb["PreToolUse"]["matcher"])
+        self.assertIn("zhook.py", hb["PreToolUse"]["hooks"][0]["command"])
+        self.assertIn("UserPromptSubmit", hb)  # P0b: front-door hook is reproducible
+        self.assertIn("zhook.py", hb["UserPromptSubmit"]["hooks"][0]["command"])
         man = json.load(open(os.path.join(out, "manifest.json")))
         self.assertEqual(man["policy_sha"], r["policy_sha"])
 

@@ -3,81 +3,359 @@
   "note": "Canonical config for the GENERATED SURFACE only: the generator (L6) renders slash-commands + agents + the hook block from this file. The RUNTIME enforcement facts (the gate set, HIGH_RISK={T3,T4} tiers, the 14-state lifecycle) are HARDCODED in the stdlib kernel and are NOT loaded from here at runtime — so the kernel runs even if this file is absent, and this file mirrors rather than drives them. Only dispatch.required_agents is drift-locked to the kernel by a test. JSON (not YAML) so the kernel has zero deps. Edit here, then `zaude gen`.",
   "launcher": "$HOME/.zaude/bin/zaude.py",
   "hook_launcher": "$HOME/.zaude/bin/zhook.py",
-
   "models": {
     "driver": "inherit",
     "policy": "Every agent inherits the driver model (Deen: no sonnet/haiku/opus — use the model I'm using).",
-    "matrix": { "*": "inherit" }
+    "matrix": {
+      "*": "inherit"
+    }
   },
-
   "command_prefix_default": "z",
   "commands": [
-    {"name": "start",        "cli": "status",        "group": "lifecycle", "summary": "Resume: show current state, allowed next steps, risk tier, open intake."},
-    {"name": "onboard",      "cli": "onboard",       "group": "lifecycle", "summary": "Scaffold a new project into Zaude (vault + git + .zaude + PM)."},
-    {"name": "clarify",      "cli": "clarify",       "group": "lifecycle", "summary": "Record requirements + acceptance criteria (Intake -> Clarified)."},
-    {"name": "prioritize",   "cli": "prioritize",    "group": "lifecycle", "summary": "Record the priority decision (Clarified -> Prioritized)."},
-    {"name": "plan",         "cli": "plan",          "group": "lifecycle", "summary": "Record the ordered plan (Prioritized -> Planned)."},
-    {"name": "design",       "cli": "design",        "group": "lifecycle", "summary": "Record the design + decision id (Planned -> Designed)."},
-    {"name": "classify-risk","cli": "classify-risk", "group": "lifecycle", "summary": "Set the risk tier T0..T4 (Designed -> RiskClassified). Gates scale to risk."},
-    {"name": "approve",      "cli": "approve",       "group": "lifecycle", "summary": "Record approval (RiskClassified -> Approved). Source edits unlock for high-risk work."},
-    {"name": "implement",    "cli": "implement",     "group": "lifecycle", "summary": "Mark implementation underway (Approved -> Implemented)."},
-    {"name": "test",         "cli": "test",          "group": "lifecycle", "summary": "Record test evidence (Implemented -> Tested). Exit code must be 0."},
-    {"name": "review",       "cli": "review",        "group": "lifecycle", "summary": "Record the review ledger (Tested -> Reviewed). Run the panel first."},
-    {"name": "verify",       "cli": "verify",        "group": "lifecycle", "summary": "Record verification evidence (Reviewed -> Verified)."},
-    {"name": "shippable",    "cli": "shippable",     "group": "lifecycle", "summary": "Quality-gate aggregate (Verified -> Shippable)."},
-    {"name": "ship",         "cli": "ship",          "group": "lifecycle", "summary": "Ship: refuses without a clean review + verification; issues a deploy token (Shippable -> Released)."},
-    {"name": "close",        "cli": "close",         "group": "lifecycle", "summary": "Close out (Released -> Closed)."},
-    {"name": "fast",         "cli": "fast",          "group": "fastlane",  "summary": "FAST LANE for small/low-risk work: Intake -> Approved in one step; code immediately."},
-    {"name": "fast-ship",    "cli": "fast-ship",     "group": "fastlane",  "summary": "FAST SHIP for small work: Approved -> Released in one step. REFUSES if tests didn't pass."},
-    {"name": "waive",        "cli": "waive",         "group": "control",   "summary": "Record an explicit, logged waiver to bypass a (waivable) gate."},
-    {"name": "status",       "cli": "status",        "group": "control",   "summary": "Print the current state projection (rebuilt from the signed trace)."},
-    {"name": "doctor",       "cli": "doctor",        "group": "control",   "summary": "Health check: trace integrity + kernel-version drift."},
-    {"name": "repair",       "cli": "repair",        "group": "control",   "summary": "Rebuild state.json from the append-only trace (never rewrites the trace)."},
-    {"name": "trace-verify", "cli": "trace-verify",  "group": "control",   "summary": "Validate the signed trace (hash-chain + HMAC integrity + legal state replay)."},
-    {"name": "dod",          "cli": "dod",           "group": "control",   "summary": "Definition-of-Done / autonomous-loop end-condition (tier-4 = done-with-evidence)."},
-    {"name": "persona",      "cli": "persona",       "group": "control",   "summary": "Operator-learning persona — the distilled 'decide as the operator would' profile loaded first in autonomous mode."},
-    {"name": "codex",        "cli": "codex",         "group": "control",   "summary": "Show codex review-seat status (availability + token + retry window). Best-effort; never gates."},
-    {"name": "opencode",     "cli": "opencode",      "group": "control",   "summary": "Show OpenCode review-seat status (the third, model-diverse best-effort reviewer). Never gates."},
-    {"name": "agents",       "cli": "agents",        "group": "control",   "summary": "Report which required capability agents are installed vs MISSING (advisory; install separately)."},
-    {"name": "next",         "cli": "next",          "group": "control",   "summary": "Print the next lifecycle command for the current state (autonomous-loop helper; stops at DoD)."},
-    {"name": "route",        "cli": "route",         "group": "control",   "summary": "INTENT DETECTION: map a natural-language request to the right command + a safety mode (auto/propose/confirm)."},
-    {"name": "remember",     "cli": "remember",      "group": "control",   "summary": "Collective memory: append a lesson/fact/decision (redacted, operator-private)."},
-    {"name": "recall",       "cli": "recall",        "group": "control",   "summary": "Collective memory: retrieve the most relevant entries for a query (TF-IDF)."},
-    {"name": "vault-sync",   "cli": "vault-sync",    "group": "control",   "summary": "Project the signed trace into the vault: regenerate current-state.md (trace-anchored) + append-only decisions.md. Idempotent."},
-    {"name": "vault-push",   "cli": "vault-push",    "group": "control",   "summary": "Sync the project vault to a shared GitHub repo (own git repo under vault/; best-effort)."},
-    {"name": "wrap", "cli": "vault-sync", "group": "control", "summary": "End-of-session wrap (v2): final review + vault-sync (trace->vault) + collective-memory lessons + credential scan + best-effort vault-push. Trace stays the source of truth.", "body": "Zaude **end-of-session wrap** for a v2 (trace-anchored) project. The signed trace (`.zaude/trace.jsonl`) is the source of truth; `vault/<slug>/current-state.md` is a GENERATED projection — never hand-edit it.\n\nRun these in the project directory, in order. If any kernel command REFUSES (a gate, the wrong state, or failed trace integrity), surface the next legal step it printed and STOP — never bypass a gate or hand-edit `.zaude/`.\n\n1. **Final review (report-only).** If `git status` shows uncommitted changes, run a final `code-reviewer` pass and report findings by severity. Do NOT fix. If CRITICAL or HIGH, STOP and tell the operator before syncing or pushing. (Safety net, not the lifecycle `/zreview` gate.)\n2. **Project the trace into the vault:** `python \"$HOME/.zaude/bin/zaude.py\" vault-sync`. Regenerates `vault/<slug>/current-state.md` and appends trace-anchored entries to `decisions.md`. If it refuses on trace integrity, run `/zrepair` and STOP.\n3. **Record lessons to collective memory.** Scan this session for corrections the operator gave, approaches they validated, new project facts (with a why), or pointers to external systems. For each: `python \"$HOME/.zaude/bin/zaude.py\" remember \"<lesson>\" --tags \"<comma,tags>\"`. Redacted + operator-private.\n4. **Credential scan.** Scan the session for pasted secrets (passwords, API keys, tokens, SSH keys). Report each as first-4/last-4 only plus the service it belongs to, for rotation. Never echo a full secret; never write one into the vault or the trace.\n5. **Push the vault (best-effort):** `python \"$HOME/.zaude/bin/zaude.py\" vault-push`. No remote / offline is fine — report it as advisory.\n6. **Report final state:** `python \"$HOME/.zaude/bin/zaude.py\" next`, then show the current state + next legal step. Run `git status` on the code repo and report clean/dirty honestly — do NOT commit or push the code repo unless the operator asked."},
-    {"name": "runner",       "cli": "runner",        "group": "control",   "summary": "Emit CI workflow + (self-hosted) a VPS runner-install script. --mode github|self-hosted."},
-    {"name": "intake",       "cli": "pm-add",        "group": "pm",        "summary": "Drop a rough idea into your Intake column."},
-    {"name": "promote",      "cli": "promote",       "group": "pm",        "summary": "Promote an intake idea into a Feature (user story + AC + child tasks/bugs)."},
-    {"name": "board",        "cli": "board",         "group": "pm",        "summary": "Show the local board (Intake + Backlog)."},
-    {"name": "pm-init",      "cli": "pm-init",       "group": "pm",        "summary": "Provision the GitHub Projects v2 board (repo + Intake-first columns + labels + fields)."},
-    {"name": "pm-sync",      "cli": "pm-sync",       "group": "pm",        "summary": "Push the board to GitHub (idempotent)."},
-    {"name": "pm-pull",      "cli": "pm-pull",       "group": "pm",        "summary": "Reconcile PM edits from GitHub back into the trace (PM-wins for business fields)."},
-    {"name": "pm-mirror",    "cli": "pm-mirror",     "group": "pm",        "summary": "Mirror the board to vault/<slug>/backlog.md + the memory index."}
+    {
+      "name": "start",
+      "cli": "status",
+      "group": "lifecycle",
+      "summary": "Resume: show current state, allowed next steps, risk tier, open intake."
+    },
+    {
+      "name": "onboard",
+      "cli": "onboard",
+      "group": "lifecycle",
+      "summary": "Scaffold a new project into Zaude (vault + git + .zaude + PM)."
+    },
+    {
+      "name": "clarify",
+      "cli": "clarify",
+      "group": "lifecycle",
+      "summary": "Record requirements + acceptance criteria (Intake -> Clarified)."
+    },
+    {
+      "name": "prioritize",
+      "cli": "prioritize",
+      "group": "lifecycle",
+      "summary": "Record the priority decision (Clarified -> Prioritized)."
+    },
+    {
+      "name": "plan",
+      "cli": "plan",
+      "group": "lifecycle",
+      "summary": "Record the ordered plan (Prioritized -> Planned)."
+    },
+    {
+      "name": "design",
+      "cli": "design",
+      "group": "lifecycle",
+      "summary": "Record the design + decision id (Planned -> Designed)."
+    },
+    {
+      "name": "classify-risk",
+      "cli": "classify-risk",
+      "group": "lifecycle",
+      "summary": "Set the risk tier T0..T4 (Designed -> RiskClassified). Gates scale to risk."
+    },
+    {
+      "name": "approve",
+      "cli": "approve",
+      "group": "lifecycle",
+      "summary": "Record approval (RiskClassified -> Approved). Source edits unlock for high-risk work."
+    },
+    {
+      "name": "implement",
+      "cli": "implement",
+      "group": "lifecycle",
+      "summary": "Mark implementation underway (Approved -> Implemented)."
+    },
+    {
+      "name": "test",
+      "cli": "test",
+      "group": "lifecycle",
+      "summary": "Record test evidence (Implemented -> Tested). Exit code must be 0."
+    },
+    {
+      "name": "review",
+      "cli": "review",
+      "group": "lifecycle",
+      "summary": "Record the review ledger (Tested -> Reviewed). Run the panel first."
+    },
+    {
+      "name": "verify",
+      "cli": "verify",
+      "group": "lifecycle",
+      "summary": "Record verification evidence (Reviewed -> Verified)."
+    },
+    {
+      "name": "shippable",
+      "cli": "shippable",
+      "group": "lifecycle",
+      "summary": "Quality-gate aggregate (Verified -> Shippable)."
+    },
+    {
+      "name": "ship",
+      "cli": "ship",
+      "group": "lifecycle",
+      "summary": "Ship: refuses without a clean review + verification; issues a deploy token (Shippable -> Released)."
+    },
+    {
+      "name": "close",
+      "cli": "close",
+      "group": "lifecycle",
+      "summary": "Close out (Released -> Closed)."
+    },
+    {
+      "name": "build",
+      "cli": "status",
+      "group": "build",
+      "summary": "Autonomous agent-driven build: plan->design->implement->review panel->verify, recorded in the signed trace, driven to tier-4 (done-with-evidence).",
+      "body": "Zaude autonomous build -- the agent-driven engine (Zaude 3). $ARGUMENTS = the goal. Runs the full lifecycle with REAL agents and records every stage in the signed trace, driven to tier-4 (done-with-evidence).\n\nPrinciple: run AGENTS to do the work; run `zaude` to RECORD it. The signed trace is the source of truth -- never hand-edit .zaude/. Let the KERNEL drive the sequence: run `Z status` then `Z next`, do the stage it names, then `Z next` again -- repeat until `Z dod` exits 0. If a kernel call REFUSES, satisfy the next legal step it prints or STOP. FULL-AUTO: keep going; HARD-STOP only on (a) a destructive/irreversible step, (b) an unresolved CRITICAL or HIGH finding, or (c) genuinely unclear scope.\n\nZ = `python \"$HOME/.zaude/bin/zaude.py\"`.\n\nEach stage: run the agent(s) for the WORK, then RECORD with the exact kernel call (flags below):\n- Intake (only if nothing is in flight): `Z pm-add --note \"<goal>\"`\n- -> Clarified:     capture requirements + acceptance criteria. `Z clarify --acceptance \"<acceptance criteria>\"`\n- -> Prioritized:   `Z prioritize --decision \"<why now / priority>\"`\n- -> Planned:       dispatch `workflow-orchestrator`. `Z plan --steps \"<ordered steps>\"`\n- -> Designed:      dispatch `architect-review` (DESIGN) + `design-bridge`/`frontend-developer`/`backend-developer` per surface; reconcile the contract. `Z design --approach \"<design>\" --decision \"<DEC-ID>\"`\n- -> RiskClassified: T0-T4 (auth / migration / prod / security / destructive => T3/T4). `Z classify-risk --tier <T>`\n- -> Approved:      T0-T2: `Z approve --by \"zbuild\"`. T3/T4: HARD-STOP -- present design + risk, get operator approval, then `Z approve --by \"<operator>\"`.\n- -> Implemented:   dispatch the specialist(s) per 03-patterns/agent-usage.md (python-pro / react-specialist / postgres-pro / etc.) to WRITE the code from the design. `Z implement`\n- -> Tested:        actually run the tests/build. `Z test --cmd \"<cmd>\" --exit <code>` (exit must be 0).\n- -> Reviewed:      parallel panel -- `code-reviewer`; `security-auditor` (only if the diff touches auth / crypto / SSH / credentials / input validation); `architect-review` (REVIEW). Model-diverse seats (best-effort, never block): Codex `codex exec --dangerously-bypass-approvals-and-sandbox` and OpenCode `opencode run` on the diff. Fold findings; count unresolved CRITICAL/HIGH. `Z review --unresolved <n> [--codex-verdict pass|concerns|fail] [--opencode-verdict pass|concerns|fail]`. HARD-STOP if unresolved CRITICAL/HIGH > 0 -- fix, then re-review.\n- -> Verified:      live evidence (built artifact inspected / health / live probe) + `evidence-verifier`. `Z verify --built ok --health ok --probe ok`\n- -> Shippable:     `Z shippable`\n- -> Released:      deploy/publish => HARD-STOP confirm (destructive) then `Z ship --deploy-id \"<id>\"`; non-deploy deliverable => `Z ship --deploy-id \"<deliverable-id>\"`\n- -> Closed:        `Z dod` (exit 0 = tier-4 green; exit 2 = return to the failing stage and continue). When dod=0: `Z close`.\n\nCommits/pushes of the code repo happen only at SHIP or on explicit operator request. Use `/zwaive <reason>` only with a real, logged reason -- never bypass a gate silently."
+    },
+    {
+      "name": "fast",
+      "cli": "fast",
+      "group": "fastlane",
+      "summary": "FAST LANE for small/low-risk work: Intake -> Approved in one step; code immediately."
+    },
+    {
+      "name": "fast-ship",
+      "cli": "fast-ship",
+      "group": "fastlane",
+      "summary": "FAST SHIP for small work: Approved -> Released in one step. REFUSES if tests didn't pass."
+    },
+    {
+      "name": "flow",
+      "cli": "flow",
+      "group": "flows",
+      "summary": "OPEN a task-typed adaptive flow (bugfix/audit/research/grooming/build): Intake -> first real-work state in one signed step; n/a stages recorded honestly.",
+      "body": "Zaude **task-typed adaptive flow** (Approach B) -- OPEN a flow shaped to the kind of work, then code immediately. $ARGUMENTS = a short note describing the work. ONE command records the flow's opening segment (Intake -> first real-work state) as a single atomic, signed collapse; n/a stages for this task type are recorded HONESTLY ({\"na\": true}) -- nothing is silently skipped. Refuses high-risk (T3/T4): high-risk work uses the full /zbuild chain.\n\nZ = `python \"$HOME/.zaude/bin/zaude.py\"`.\n\nPick the flow that matches the work and run `Z flow --type <t> --note \"<note>\" [--tier T0..T2]`:\n\n- **bugfix** -- a defect to reproduce and fix. Prioritized/Planned/Designed/Shippable are n/a. Before recording, reproduce the bug (a failing test or a concrete repro) so the note is real. `Z flow --type bugfix --note \"repro: <how it fails>\"`. Then: fix the code, run the tests, and close with `/zflow-finish --type bugfix --tested-exit <code>` (it KEEPS the evidence gate -- a non-zero exit REFUSES to ship).\n- **audit** -- a security/quality audit. Terminal Reviewed; NO release token is ever issued. Scope the audit in the note. `Z flow --type audit --note \"scope: <what you are auditing>\"`. Then INVESTIGATE with the relevant agents (`security-auditor`, `architect-review`) and record findings; close with `/zflow-finish --type audit` (no deploy).\n- **research** -- a spike / investigation with no code to ship. Like audit; terminal Reviewed; no code evidence required. `Z flow --type research --note \"question: <what you are answering>\"`. Then research (web + repo + `deep-research` if warranted), record findings, close with `/zflow-finish --type research`.\n- **grooming** -- backlog intake -> dedupe/rank -> publish. Terminal Reviewed; no release token. `Z flow --type grooming --note \"intake: <the batch you are grooming>\"`. Then dedupe + rank, publish the groomed list, close with `/zflow-finish --type grooming`.\n- **build** -- the full feature chain (every stage applicable; terminal Released). Equivalent to today's default; prefer `/zbuild` for a fully agent-driven build. `Z flow --type build --note \"<goal>\"`.\n\nAfter OPENING: run `Z next` -- it is flow-aware and prints the next APPLICABLE command (it skips this flow's n/a stages). Do the work the stage names with REAL agents, then record it with the matching `Z <stage>` call, and `Z next` again -- repeat until you reach the flow's terminal, then `/zflow-finish --type <t> ...`. The signed trace is the source of truth -- never hand-edit .zaude/. Use `/zwaive <reason>` only with a real, logged reason."
+    },
+    {
+      "name": "flow-finish",
+      "cli": "flow-finish",
+      "group": "flows",
+      "summary": "CLOSE a task-typed adaptive flow to its terminal. Keeps the evidence gate for release flows (build/bugfix); issues NO token for Reviewed-terminal flows.",
+      "body": "Zaude **task-typed adaptive flow** (Approach B) -- CLOSE the active flow by recording its closing segment from the current state to the flow's terminal, as a single atomic, signed collapse. The `--type` MUST match the flow you opened.\n\nZ = `python \"$HOME/.zaude/bin/zaude.py\"`.\n\n`Z flow-finish --type <t> [--tested-cmd \"<cmd>\" --tested-exit <code> --deploy-id \"<id>\"]`\n\n- For a **release-issuing** terminal (build, bugfix -> Released): you MUST have actually run the tests. Pass the real exit code: `--tested-exit <code>`. A non-zero exit REFUSES to close (the evidence gate -- never ship broken code). On exit 0 a deploy/release token is issued. A deploy is destructive -- HARD-STOP and confirm with the operator before running this for a release flow.\n- For a **Reviewed-terminal** flow (audit, research, grooming -> Reviewed): NO release token is issued and no test exit code is required. Just record your findings/output through the applicable stages first (`Z next` names them), then `Z flow-finish --type <t>`.\n\nAn unknown `--type` is a clean refusal (nothing is written). After closing, run `Z dod` -- it is terminal-aware (done when the state reaches THIS flow's terminal, checking only the evidence the flow marks applicable); exit 0 = done-with-evidence. The signed trace is the source of truth -- never hand-edit .zaude/."
+    },
+    {
+      "name": "waive",
+      "cli": "waive",
+      "group": "control",
+      "summary": "Record an explicit, logged waiver to bypass a (waivable) gate."
+    },
+    {
+      "name": "status",
+      "cli": "status",
+      "group": "control",
+      "summary": "Print the current state projection (rebuilt from the signed trace)."
+    },
+    {
+      "name": "doctor",
+      "cli": "doctor",
+      "group": "control",
+      "summary": "Health check: trace integrity + kernel-version drift."
+    },
+    {
+      "name": "repair",
+      "cli": "repair",
+      "group": "control",
+      "summary": "Rebuild state.json from the append-only trace (never rewrites the trace)."
+    },
+    {
+      "name": "trace-verify",
+      "cli": "trace-verify",
+      "group": "control",
+      "summary": "Validate the signed trace (hash-chain + HMAC integrity + legal state replay)."
+    },
+    {
+      "name": "dod",
+      "cli": "dod",
+      "group": "control",
+      "summary": "Definition-of-Done / autonomous-loop end-condition (tier-4 = done-with-evidence)."
+    },
+    {
+      "name": "persona",
+      "cli": "persona",
+      "group": "control",
+      "summary": "Operator-learning persona — the distilled 'decide as the operator would' profile loaded first in autonomous mode."
+    },
+    {
+      "name": "codex",
+      "cli": "codex",
+      "group": "control",
+      "summary": "Show codex review-seat status (availability + token + retry window). Best-effort; never gates."
+    },
+    {
+      "name": "opencode",
+      "cli": "opencode",
+      "group": "control",
+      "summary": "Show OpenCode review-seat status (the third, model-diverse best-effort reviewer). Never gates."
+    },
+    {
+      "name": "agents",
+      "cli": "agents",
+      "group": "control",
+      "summary": "Report which required capability agents are installed vs MISSING (advisory; install separately)."
+    },
+    {
+      "name": "next",
+      "cli": "next",
+      "group": "control",
+      "summary": "Print the next lifecycle command for the current state (autonomous-loop helper; stops at DoD)."
+    },
+    {
+      "name": "route",
+      "cli": "route",
+      "group": "control",
+      "summary": "INTENT DETECTION: map a natural-language request to the right command + a safety mode (auto/propose/confirm)."
+    },
+    {
+      "name": "remember",
+      "cli": "remember",
+      "group": "control",
+      "summary": "Collective memory: append a lesson/fact/decision (redacted, operator-private)."
+    },
+    {
+      "name": "recall",
+      "cli": "recall",
+      "group": "control",
+      "summary": "Collective memory: retrieve the most relevant entries for a query (TF-IDF)."
+    },
+    {
+      "name": "vault-sync",
+      "cli": "vault-sync",
+      "group": "control",
+      "summary": "Project the signed trace into the vault: regenerate current-state.md (trace-anchored) + append-only decisions.md. Idempotent."
+    },
+    {
+      "name": "vault-push",
+      "cli": "vault-push",
+      "group": "control",
+      "summary": "Sync the project vault to a shared GitHub repo (own git repo under vault/; best-effort)."
+    },
+    {
+      "name": "wrap",
+      "cli": "vault-sync",
+      "group": "control",
+      "summary": "End-of-session wrap (v2): final review + vault-sync (trace->vault) + collective-memory lessons + credential scan + best-effort vault-push. Trace stays the source of truth.",
+      "body": "Zaude **end-of-session wrap** for a v2 (trace-anchored) project. The signed trace (`.zaude/trace.jsonl`) is the source of truth; `vault/<slug>/current-state.md` is a GENERATED projection — never hand-edit it.\n\nRun these in the project directory, in order. If any kernel command REFUSES (a gate, the wrong state, or failed trace integrity), surface the next legal step it printed and STOP — never bypass a gate or hand-edit `.zaude/`.\n\n1. **Final review (report-only).** If `git status` shows uncommitted changes, run a final `code-reviewer` pass and report findings by severity. Do NOT fix. If CRITICAL or HIGH, STOP and tell the operator before syncing or pushing. (Safety net, not the lifecycle `/zreview` gate.)\n2. **Project the trace into the vault:** `python \"$HOME/.zaude/bin/zaude.py\" vault-sync`. Regenerates `vault/<slug>/current-state.md` and appends trace-anchored entries to `decisions.md`. If it refuses on trace integrity, run `/zrepair` and STOP.\n3. **Record lessons to collective memory.** Scan this session for corrections the operator gave, approaches they validated, new project facts (with a why), or pointers to external systems. For each: `python \"$HOME/.zaude/bin/zaude.py\" remember \"<lesson>\" --tags \"<comma,tags>\"`. Redacted + operator-private.\n4. **Credential scan.** Scan the session for pasted secrets (passwords, API keys, tokens, SSH keys). Report each as first-4/last-4 only plus the service it belongs to, for rotation. Never echo a full secret; never write one into the vault or the trace.\n5. **Push the vault (best-effort):** `python \"$HOME/.zaude/bin/zaude.py\" vault-push`. No remote / offline is fine — report it as advisory.\n6. **Report final state:** `python \"$HOME/.zaude/bin/zaude.py\" next`, then show the current state + next legal step. Run `git status` on the code repo and report clean/dirty honestly — do NOT commit or push the code repo unless the operator asked."
+    },
+    {
+      "name": "runner",
+      "cli": "runner",
+      "group": "control",
+      "summary": "Emit CI workflow + (self-hosted) a VPS runner-install script. --mode github|self-hosted."
+    },
+    {
+      "name": "intake",
+      "cli": "pm-add",
+      "group": "pm",
+      "summary": "Drop a rough idea into your Intake column."
+    },
+    {
+      "name": "promote",
+      "cli": "promote",
+      "group": "pm",
+      "summary": "Promote an intake idea into a Feature (user story + AC + child tasks/bugs)."
+    },
+    {
+      "name": "board",
+      "cli": "board",
+      "group": "pm",
+      "summary": "Show the local board (Intake + Backlog)."
+    },
+    {
+      "name": "pm-init",
+      "cli": "pm-init",
+      "group": "pm",
+      "summary": "Provision the GitHub Projects v2 board (repo + Intake-first columns + labels + fields)."
+    },
+    {
+      "name": "pm-sync",
+      "cli": "pm-sync",
+      "group": "pm",
+      "summary": "Push the board to GitHub (idempotent)."
+    },
+    {
+      "name": "pm-pull",
+      "cli": "pm-pull",
+      "group": "pm",
+      "summary": "Reconcile PM edits from GitHub back into the trace (PM-wins for business fields)."
+    },
+    {
+      "name": "pm-mirror",
+      "cli": "pm-mirror",
+      "group": "pm",
+      "summary": "Mirror the board to vault/<slug>/backlog.md + the memory index."
+    },
+    {
+      "name": "item-activate",
+      "cli": "item-activate",
+      "group": "pm",
+      "summary": "Activate a promoted backlog item: create its OWN single-track signed sub-trace under .zaude/items/<id>/ (the per-item reducer runs unchanged)."
+    },
+    {
+      "name": "active-set",
+      "cli": "active-set",
+      "group": "pm",
+      "summary": "Focus the autonomous loop on ONE work item (or --clear back to root). Lifecycle commands then record into that item's sub-trace."
+    },
+    {
+      "name": "board-next",
+      "cli": "board-next",
+      "group": "pm",
+      "summary": "Autonomous MULTI-ITEM loop helper: print the next board-level action (promote / activate / focus+drive / board-DoD MET)."
+    },
+    {
+      "name": "board-dod",
+      "cli": "board-dod",
+      "group": "pm",
+      "summary": "Board-level Definition-of-Done: met when intake is empty AND every promoted item has a sub-trace that is done-with-evidence."
+    }
   ],
-
   "agents": [
     {
-      "name": "evidence-verifier", "standing": true, "model": "inherit", "capability": "readonly",
+      "name": "evidence-verifier",
+      "standing": true,
+      "model": "inherit",
+      "capability": "readonly",
       "produces": "verification.json",
       "brief": "Refuse any 'done'/'resolved'/'shipped' claim that is not backed by APPLY EVIDENCE: a real command + its exit code, the built artifact actually inspected (grep the deployed bundle, not the source), a live health/probe result. Output a verification.json {built_artifact_check, health, live_probe, exit_codes}. If evidence is missing, say so plainly and name what's needed. Never accept LLM recollection as evidence."
     },
     {
-      "name": "supply-chain-auditor", "standing": true, "model": "inherit", "capability": "readonly",
+      "name": "supply-chain-auditor",
+      "standing": true,
+      "model": "inherit",
+      "capability": "readonly",
       "produces": "sbom.json",
       "brief": "Audit dependencies + provenance before ship: new/changed deps, known-critical vulnerabilities, lockfile integrity, install scripts, typosquats, unpinned versions. Produce an sbom.json summary + a blocking verdict on any known-critical. Flag anything that pulls code at install time."
     },
     {
-      "name": "ui-design-implementer", "standing": false, "model": "inherit", "capability": "edit",
+      "name": "ui-design-implementer",
+      "standing": false,
+      "model": "inherit",
+      "capability": "edit",
       "produces": "ui-notes.md",
       "brief": "Frontend design/UX is a first-class deliverable, not an afterthought (finding #7). When a feature touches UI: (1) if a screenshot or design reference is provided, reproduce it faithfully — spacing, hierarchy, color, states; codex is strong at reading screenshots and turning them into concrete component/CSS specs, so pair codex (read the design) + claude (implement) here; (2) otherwise apply sane defaults — accessible contrast, loading/empty/error states, responsive layout, focus management, no dead/hardcoded data. Output ui-notes.md: the design rules applied, the components built, and any screenshot/design inputs used. Never ship a placeholder UI."
     }
   ],
-
   "dispatch": {
-    "always_invoke_reviewers": ["code-reviewer", "architect-review", "security-auditor"],
-    "required_agents": ["code-reviewer", "architect-review", "security-auditor", "workflow-orchestrator", "backend-developer", "frontend-developer", "design-bridge"],
-    "external_reviewers": ["codex", "opencode"],
+    "always_invoke_reviewers": [
+      "code-reviewer",
+      "architect-review",
+      "security-auditor"
+    ],
+    "required_agents": [
+      "code-reviewer",
+      "architect-review",
+      "security-auditor",
+      "workflow-orchestrator",
+      "backend-developer",
+      "frontend-developer",
+      "design-bridge"
+    ],
+    "external_reviewers": [
+      "codex",
+      "opencode"
+    ],
     "external_reviewer_best_effort": true,
     "external_reviewers_note": "BOTH are advisory/best-effort, NEVER required: a missing/unauth/out-of-credit/crashed external reviewer never blocks /review or /ship. The ship gate reads ONLY unresolved_critical_high.",
     "tiers": {
@@ -88,18 +366,24 @@
       "T4": "auth/migration/prod/security/destructive — full gates + panel + approval (codex used if available)"
     }
   },
-
   "review_panel": {
     "panel_from_tier": "T3",
-    "seats": ["claude_lenses", "codex", "opencode"],
+    "seats": [
+      "claude_lenses",
+      "codex",
+      "opencode"
+    ],
     "shadow": [],
     "rule": "Claude lenses always run. Codex and OpenCode are BEST-EFFORT external seats: a missing / unauthenticated / out-of-credit / timed-out / crashed / skipped reviewer NEVER blocks /review or /ship — the cycle continues without it (recorded honestly), and an available-but-unrun reviewer is a non-blocking nudge. The two seats are independent (one's no-credit backoff never affects the other). The ship gate reads ONLY unresolved_critical_high — no seat sets the gate by itself; the driver folds any verdict it wants to honor into that count. OpenCode is provider-agnostic, so it adds a MODEL-DIVERSE third voice (e.g. Gemini/GPT/local)."
   },
-
   "hooks": {
     "PreToolUse": {
       "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
       "command": "python \"$HOME/.zaude/bin/zhook.py\" pre_tool_use",
+      "timeout": 10
+    },
+    "UserPromptSubmit": {
+      "command": "python \"$HOME/.zaude/bin/zhook.py\" user_prompt_submit",
       "timeout": 10
     }
   }
