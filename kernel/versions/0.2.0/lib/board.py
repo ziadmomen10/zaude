@@ -13,13 +13,15 @@ Design invariants (verified against the kernel this builds on):
 - The sub-trace is a NORMAL trace: `trace.append_row(item_dir, row, root)` chains+MACs it exactly like
   the root, and `trace.read_trace(item_dir, root, verify=True)` verifies it. A forged sub-trace raises
   `TraceForged` just like the root (so the hook fails closed on it in enforce).
-- `active_item_dir()` / `active_item_id()` are TOTAL: they NEVER raise and return None on ANY problem,
-  because the hook depends on them failing open to the root trace (today's behavior).
+- `active_item_dir(zaude_dir, root)` / `active_item_id()` are TOTAL: they NEVER raise and return None on
+  ANY problem, because the hook depends on them failing open to the root trace (today's behavior).
+  `active_item_dir` binds SELECTION to the signed marker set (a committed item), not bare dir existence.
 - A project with NO `.zaude/items/` dir never grows any of this (the legacy / back-compat path).
 
 stdlib only.
 """
 import os
+import re
 
 from . import trace
 from . import state as st
@@ -29,6 +31,12 @@ ITEMS_DIRNAME = "items"
 ACTIVE_FILE = "active"
 BOARD_FILE = "board.json"
 
+# A work id is a directory name under items/, so it MUST be a single plain token — no separators,
+# no traversal, no drive qualifier (e.g. "C:foo"), no colon/dot/whitespace. Anchored, length-capped.
+# pm.next_work_id emits ids like "ZA-2026-00001" which match; a hand-passed --id that doesn't match
+# is rejected at every entry point. [HIGH: path-traversal hardening]
+_ITEM_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
 
 # ---------------------------------------------------------------- paths
 def items_root(zaude_dir):
@@ -36,23 +44,34 @@ def items_root(zaude_dir):
 
 
 def item_dir(zaude_dir, item_id):
-    """The sub-trace directory for a work item. Pure path join (no I/O)."""
-    return os.path.join(zaude_dir, ITEMS_DIRNAME, item_id)
+    """The sub-trace directory for a work item, or None if the id is invalid OR the resolved path
+    escapes items/ (defense-in-depth). A None return MUST be treated by callers as 'no such item'
+    (the strict id check already rejects traversal; the realpath-containment is a belt-and-braces
+    guard against symlinks / odd platform path joins). No trace I/O — only path resolution."""
+    if not _valid_item_id(item_id):
+        return None
+    base = items_root(zaude_dir)
+    cand = os.path.join(base, item_id)
+    # realpath-contain: the resolved candidate must equal or live under realpath(items_base). This
+    # catches anything the regex somehow let through plus symlink escapes. realpath never raises.
+    try:
+        rbase = os.path.realpath(base)
+        rcand = os.path.realpath(cand)
+    except Exception:
+        return None
+    if rcand != rbase and not rcand.startswith(rbase + os.sep):
+        return None
+    return cand
 
 
 def _valid_item_id(item_id):
-    """A work id must be a simple non-empty token with no path separators / traversal — it is used
-    as a directory name, so reject anything that could escape items/ . (Defensive: ids come from
-    pm.next_work_id like ZA-2026-00001, but a hand-passed --id must not traverse.)"""
-    if not item_id or not isinstance(item_id, str):
+    """A work id must be a single plain token (str, non-empty, anchored to _ITEM_ID_RE) so it is safe
+    as a directory name under items/ . Rejects path separators, "..", absolute paths, drive
+    qualifiers like "C:foo", colons, dots, whitespace, NUL, empty, and non-str. (Ids come from
+    pm.next_work_id like ZA-2026-00001; a hand-passed --id must not traverse.)"""
+    if not isinstance(item_id, str) or not item_id:
         return False
-    if item_id in (".", ".."):
-        return False
-    if "/" in item_id or "\\" in item_id or os.sep in item_id or (os.altsep and os.altsep in item_id):
-        return False
-    if "\x00" in item_id:
-        return False
-    return True
+    return _ITEM_ID_RE.match(item_id) is not None
 
 
 # ---------------------------------------------------------------- active (TOTAL, never raises)
@@ -73,16 +92,22 @@ def active_item_id(zaude_dir):
         return None
 
 
-def active_item_dir(zaude_dir):
-    """Return the active item's sub-trace dir IFF an active id is set AND items/<id>/ exists, else
-    None. TOTAL — never raises (the hook calls `active_item_dir(zd) or zd`, so None == today's root
-    path). A set-but-missing active dir returns None => fail-open to the root trace."""
+def active_item_dir(zaude_dir, root):
+    """Return the active item's sub-trace dir IFF an active id is set AND that id is a COMMITTED item
+    (carries a signed {"kind":"item_activate"} marker on the ROOT trace) AND items/<id>/ exists, else
+    None. TOTAL — never raises (the hook calls `active_item_dir(zd, root) or zd`, so None == today's
+    root path). A set-but-missing active dir, OR an active pointer at an UNACTIVATED id (a crash-orphan
+    dir / a copied-or-planted items/<id>/ sub-trace with no signed marker), returns None => fail-open
+    to the root trace. SELECTION is thus bound to the signed marker set, never to bare dir existence,
+    so an uncommitted item can never be gated/driven via the `active` file. [HIGH: selection-binding]"""
     try:
         iid = active_item_id(zaude_dir)
         if iid is None:
             return None
-        d = item_dir(zaude_dir, iid)
-        if os.path.isdir(d):
+        if iid not in _marker_item_ids(zaude_dir, root):   # not a committed/signed item
+            return None
+        d = item_dir(zaude_dir, iid)            # None if id invalid / escapes items/
+        if d and os.path.isdir(d):
             return d
         return None
     except Exception:
@@ -91,42 +116,85 @@ def active_item_dir(zaude_dir):
 
 # ---------------------------------------------------------------- item lifecycle (root-locked)
 def activate_item(zaude_dir, root, item_id):
-    """Create items/<id>/ as a NORMAL single-track signed sub-trace (its own `init` row + state.json)
-    and record {"kind":"item_activate","item_id":id} on the ROOT trace (under the ROOT lock). Idempotent:
-    re-activating an existing item re-records the marker but does NOT re-init the sub-trace (which
-    would reset its state). Returns the item dir.
+    """Atomically activate a work item under the ROOT lock, with the root {"kind":"item_activate"}
+    marker as the COMMIT POINT (written LAST). Returns the item dir.
 
-    The ROOT lock serializes the marker append; the sub-trace's own init is written before the marker
-    so a reader that sees the marker can always project the item.
+    Atomicity contract [HIGH]: the WHOLE activate runs under ONE root lock. The order is:
+      1. (re)create items/<id>/ and write its sub-trace `init` row + state.json,
+      2. ONLY THEN append the root `item_activate` marker (the commit point).
+    Item ENUMERATION is marker-derived (see list_item_ids), so a crash BEFORE step 2 leaves an
+    orphaned items/<id>/ dir that everyone IGNORES (no marker => not an item). Re-running is then
+    idempotent: if the marker already exists it is a no-op; otherwise it overwrites the partial dir
+    and writes the marker exactly once. No half-activated item can ever be observed.
     """
     if not _valid_item_id(item_id):
         raise ValueError("invalid work id %r" % (item_id,))
     d = item_dir(zaude_dir, item_id)
-    os.makedirs(os.path.join(d, "artifacts"), exist_ok=True)
+    if d is None:
+        raise ValueError("invalid work id %r" % (item_id,))
     lp = trace.acquire_lock(zaude_dir)
     try:
-        # init the per-item trace ONCE (an empty sub-trace dir => first activation). Use the per-item
-        # lock so two activations of the SAME id can't both init (root lock guards the marker, not the
-        # sub-trace file).
-        ilp = trace.acquire_lock(d)
-        try:
-            if not trace.read_trace(d, root, verify=False):
-                trace.append_row(d, {"kind": "init", "root": root, "item_id": item_id}, root)
-                _write_item_state(d, root)
-        finally:
-            trace.release_lock(ilp)
-        trace.append_row(zaude_dir, {"kind": "item_activate", "item_id": item_id}, root)
+        # idempotent: a committed marker => already fully activated => no-op (never reset its state).
+        if item_id in _marker_item_ids(zaude_dir, root):
+            return d
+        # no marker yet => this dir (if present) is at most a crash orphan; (re)init it from scratch
+        # so a partial dir is healed, then COMMIT by appending the root marker last.
+        os.makedirs(os.path.join(d, "artifacts"), exist_ok=True)
+        _init_item_subtrace(d, root, item_id)
+        trace.append_row(zaude_dir, {"kind": "item_activate", "item_id": item_id}, root)  # COMMIT
     finally:
         trace.release_lock(lp)
     return d
+
+
+def _init_item_subtrace(d, root, item_id):
+    """(Re)initialize the per-item sub-trace to a clean single-track: a fresh `init` row + state.json.
+    Called only with no committed marker for this id (first activation OR healing a crash orphan), so
+    overwriting any partial trace is safe — the partial was never observable. Truncates an existing
+    trace.jsonl first so a re-init starts a clean chain."""
+    tp = os.path.join(d, "trace.jsonl")
+    try:
+        if os.path.exists(tp):
+            os.remove(tp)
+    except OSError:
+        pass
+    trace.append_row(d, {"kind": "init", "root": root, "item_id": item_id}, root)
+    _write_item_state(d, root)
+
+
+def _marker_item_ids(zaude_dir, root):
+    """The committed work ids: the set of ids carried by {"kind":"item_activate"} markers on the ROOT
+    trace, in first-seen order, validated. This is the SOURCE OF TRUTH for which items exist — derived
+    from the signed trace, never from a raw scandir of items/ (so crash orphans are ignored and an
+    attacker-planted dir without a signed marker is not an item). TOTAL: returns [] on any problem."""
+    out = []
+    seen = set()
+    try:
+        rows = trace.read_trace(zaude_dir, root, verify=True)
+    except Exception:
+        return []
+    for r in rows:
+        if r.get("kind") == "item_activate":
+            wid = r.get("item_id")
+            if _valid_item_id(wid) and wid not in seen:
+                seen.add(wid)
+                out.append(wid)
+    return out
 
 
 def set_active(zaude_dir, root, item_id_or_none):
     """Record {"kind":"active_set","item_id":id|null} on the ROOT trace and write (or clear) the
     one-line `active` file. Passing None clears the active item (back to root/legacy). The ROOT lock
     serializes the marker + the file write together."""
-    if item_id_or_none is not None and not _valid_item_id(item_id_or_none):
-        raise ValueError("invalid work id %r" % (item_id_or_none,))
+    if item_id_or_none is not None:
+        if not _valid_item_id(item_id_or_none):
+            raise ValueError("invalid work id %r" % (item_id_or_none,))
+        # SELECTION must be bound to a COMMITTED marker: you cannot focus an item that was never
+        # activated (no signed item_activate marker), even if a items/<id>/ dir happens to exist on
+        # disk (crash orphan / planted dir). [HIGH: selection-binding]
+        if item_id_or_none not in _marker_item_ids(zaude_dir, root):
+            raise ValueError("work id %s is not activated -- run item-activate first"
+                             % (item_id_or_none,))
     lp = trace.acquire_lock(zaude_dir)
     try:
         trace.append_row(zaude_dir, {"kind": "active_set", "item_id": item_id_or_none}, root)
@@ -226,20 +294,23 @@ def _root_board(zaude_dir, root):
     return pm.pm_board(trace.read_trace(zaude_dir, root, verify=True))
 
 
-def list_item_ids(zaude_dir):
-    """Existing items/<id>/ sub-trace dirs (those carrying a trace). Total: returns [] on any problem."""
+def list_item_ids(zaude_dir, root):
+    """The existing work items, MARKER-DERIVED from the ROOT trace's {"kind":"item_activate"} markers
+    (NOT a raw scandir of items/). An id appears only if it has a committed marker AND its sub-trace
+    dir exists on disk — so a crash orphan (dir, no marker) is ignored, and a stale marker whose dir
+    was wiped is skipped. Sorted for stable output. TOTAL: returns [] on any problem.
+
+    Requires `root` (the project root) to read+verify the signed root trace — the marker set is the
+    source of truth for enumeration, so it must be verified, not scandir'd."""
     out = []
     try:
-        ir = items_root(zaude_dir)
-        if not os.path.isdir(ir):
-            return out
-        for name in sorted(os.listdir(ir)):
-            d = os.path.join(ir, name)
-            if os.path.isdir(d) and os.path.isfile(os.path.join(d, "trace.jsonl")):
-                out.append(name)
+        for wid in _marker_item_ids(zaude_dir, root):
+            d = item_dir(zaude_dir, wid)
+            if d and os.path.isdir(d) and os.path.isfile(os.path.join(d, "trace.jsonl")):
+                out.append(wid)
     except Exception:
         return []
-    return out
+    return sorted(out)
 
 
 def _promoted_work_ids(board):
@@ -261,17 +332,18 @@ def board_dod(zaude_dir, root):
     board = _root_board(zaude_dir, root)
     open_intake = len(board["intake"])
     promoted = _promoted_work_ids(board)
-    have = set(list_item_ids(zaude_dir))
+    have = set(list_item_ids(zaude_dir, root))
     unactivated = [wid for wid in promoted if wid not in have]
     items_total = len(promoted)
     items_done = 0
     unfinished = []
     for wid in promoted:
-        if wid not in have:
+        d = item_dir(zaude_dir, wid)
+        if wid not in have or d is None:
             unfinished.append(wid)
             continue
         try:
-            if item_done(item_dir(zaude_dir, wid), root)["met"]:
+            if item_done(d, root)["met"]:
                 items_done += 1
             else:
                 unfinished.append(wid)
@@ -325,8 +397,11 @@ def rebuild_board_index(zaude_dir, root):
     (used by `zaude repair`). Returns the written dict."""
     board = _root_board(zaude_dir, root)
     items = {}
-    for wid in list_item_ids(zaude_dir):
+    for wid in list_item_ids(zaude_dir, root):
         d = item_dir(zaude_dir, wid)
+        if d is None:
+            items[wid] = {"error": "InvalidItemId"}
+            continue
         try:
             proj = st.reduce(trace.read_trace(d, root, verify=True))
             items[wid] = {

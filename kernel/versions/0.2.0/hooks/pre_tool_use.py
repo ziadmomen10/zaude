@@ -127,7 +127,7 @@ def main():
     # comes from the active item; gates.evaluate still receives the ROOT zaude_dir (so protect_zaude /
     # _under still protect ALL of .zaude/, including items/). A forged ACTIVE sub-trace raises
     # TraceForged here exactly like a forged root -> fail-closed in enforce. [P4 Approach A]
-    gate_dir = board.active_item_dir(zaude_dir) or zaude_dir
+    gate_dir = board.active_item_dir(zaude_dir, root) or zaude_dir
     try:
         rows = trace.read_trace(gate_dir, root, verify=True)
         proj_state = st.reduce(rows)

@@ -124,12 +124,17 @@ def _resolve_active(args):
             sys.stderr.write("refused: invalid --item id %r\n" % override)
             sys.exit(3)
         d = board.item_dir(zd, override)
-        if not os.path.isdir(d):
+        if d is None:
+            sys.stderr.write("refused: invalid --item id %r\n" % override)
+            sys.exit(3)
+        # SELECTION must be bound to a committed marker: a dir alone (crash orphan / planted sub-trace)
+        # is NOT a valid target — require a signed item_activate marker. [HIGH: selection-binding]
+        if not os.path.isdir(d) or override not in board._marker_item_ids(zd, root):
             sys.stderr.write("refused: no such work item %r (run `item-activate --id %s` first)\n"
                              % (override, override))
             sys.exit(3)
         return d, root
-    active = board.active_item_dir(zd)
+    active = board.active_item_dir(zd, root)
     return (active or zd), root
 
 
@@ -760,7 +765,10 @@ def cmd_item_activate(args):
     if args.id not in bd["items"]:
         sys.stderr.write("refused: %s is not a promoted backlog item (run /zpromote first; "
                          "/zboard lists ids)\n" % args.id); return 3
-    d = board.activate_item(zd, root, args.id)
+    try:
+        d = board.activate_item(zd, root, args.id)
+    except ValueError as e:
+        sys.stderr.write("refused: %s\n" % e); return 3
     print("item-activate: %s -> %s (single-track sub-trace ready)"
           % (args.id, os.path.relpath(d, root)))
     return 0
@@ -779,10 +787,18 @@ def cmd_active_set(args):
     if iid is not None:
         if not board._valid_item_id(iid):
             sys.stderr.write("refused: invalid work id %r\n" % iid); return 3
-        if not os.path.isdir(board.item_dir(zd, iid)):
+        idir = board.item_dir(zd, iid)
+        if idir is None:
+            sys.stderr.write("refused: invalid work id %r\n" % iid); return 3
+        if not os.path.isdir(idir):
             sys.stderr.write("refused: no sub-trace for %s — run `item-activate --id %s` first\n"
                              % (iid, iid)); return 3
-    board.set_active(zd, root, iid)
+    # set_active binds SELECTION to a committed marker: focusing an unactivated id (no signed marker —
+    # crash orphan / planted dir) raises ValueError, which we surface as a clean refusal, not a crash.
+    try:
+        board.set_active(zd, root, iid)
+    except ValueError as e:
+        sys.stderr.write("refused: %s\n" % e); return 3
     print("active-set: %s" % (iid if iid is not None else "(cleared — back to root/legacy)"))
     return 0
 
@@ -1098,9 +1114,11 @@ def cmd_trace_verify(args):
         cur = st.project_state(rows)
     except (trace.TraceCorrupt, trace.TraceForged, st.StateForged) as e:
         sys.stderr.write("TRACE INVALID (root): %s\n" % e); return 5
-    item_ids = board.list_item_ids(zd)
+    item_ids = board.list_item_ids(zd, root)
     for wid in item_ids:
         d = board.item_dir(zd, wid)
+        if d is None:
+            sys.stderr.write("TRACE INVALID (item %s): invalid item id\n" % wid); return 5
         try:
             irows = trace.read_trace(d, root, verify=True)
             st.project_state(irows)
@@ -1714,9 +1732,12 @@ def cmd_doctor(args):
         issues.append("trace: %s" % e)
     # P4: also verify each item sub-trace (one shared key). A bad item is a real issue naming it; a
     # legacy project (no items/ dir) adds nothing -> identical output to today.
-    for wid in board.list_item_ids(zd):
+    for wid in board.list_item_ids(zd, root):
+        d = board.item_dir(zd, wid)
+        if d is None:
+            issues.append("trace (item %s): invalid item id" % wid); continue
         try:
-            st.reduce(trace.read_trace(board.item_dir(zd, wid), root, verify=True))
+            st.reduce(trace.read_trace(d, root, verify=True))
         except Exception as e:
             issues.append("trace (item %s): %s" % (wid, e))
     if _kernel_version() != _project_kernel_version(zd):
