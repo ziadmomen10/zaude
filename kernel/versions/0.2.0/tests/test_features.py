@@ -145,22 +145,23 @@ class CodexGracefulTests(TmpCase):
                     ["classify-risk", "--tier", "T4"], ["approve", "--by", "op"], ["implement"],
                     ["test", "--cmd", "t", "--exit", "0"]):
             self.assertEqual(self._cli(*cmd).returncode, 0, cmd)
-        # /review in-process with codex forced MISSING. Force opencode MISSING too: this lock is
-        # about the codex seat being ABSENT (anti-fail-closed) — on a box where opencode is actually
-        # installed it would otherwise trip the (separate) panel-enforcement gate, which is not what
-        # this test exercises. Both absent => both 'unavailable' => panel gate silent (correct).
-        import lib.codex as cx, lib.opencode as oc
-        orig = cx.probe
-        oc_orig = oc.probe
+        # /review in-process with codex forced MISSING. Force the OTHER model-diverse seats MISSING
+        # too: this lock is about the codex seat being ABSENT (anti-fail-closed) — on a box where any
+        # of opencode/kimi/glm is actually installed it would otherwise trip the (separate) panel-
+        # enforcement gate, which is not what this test exercises. All absent => all 'unavailable' =>
+        # panel gate silent (correct). [env-independent across all external seats]
+        import lib.codex as cx, lib.opencode as oc, lib.kimi as ki, lib.glm as gl
+        orig, oc_orig, ki_orig, gl_orig = cx.probe, oc.probe, ki.probe, gl.probe
         cx.probe = lambda *a, **k: {"status": "missing", "version": None, "auth_source": None,
                                     "detail": "absent", "checked_at": time.time()}
         oc.probe = lambda *a, **k: {"status": oc.MISSING, "version": None, "detail": "absent"}
+        ki.probe = lambda *a, **k: {"status": ki.MISSING, "version": None, "detail": "absent"}
+        gl.probe = lambda *a, **k: {"status": gl.MISSING, "version": None, "detail": "absent"}
         try:
             rc = cli.cmd_review(self._ap.Namespace(path=self.tmp, summary="", unresolved="0",
                                                    codex="auto", codex_verdict=None, codex_summary=""))
         finally:
-            cx.probe = orig
-            oc.probe = oc_orig
+            cx.probe, oc.probe, ki.probe, gl.probe = orig, oc_orig, ki_orig, gl_orig
         self.assertEqual(rc, 0)
         ledger = json.load(open(os.path.join(self.tmp, ".zaude", "artifacts",
                                              "review-ledger.json"), encoding="utf-8"))
@@ -778,12 +779,16 @@ class OpenCodeGracefulTests(TmpCase):
             self.assertEqual(self._cli(*cmd).returncode, 0, cmd)
         r = self._cli("review", "--unresolved", "0",
                       "--skip-codex-ack", "n/a for this lock",
-                      "--skip-opencode-ack", "n/a for this lock")
+                      "--skip-opencode-ack", "n/a for this lock",
+                      "--skip-kimi-ack", "n/a for this lock",
+                      "--skip-glm-ack", "n/a for this lock")
         self.assertEqual(r.returncode, 0, r.stderr)           # a recorded seat NEVER fails /review
         led = json.load(open(os.path.join(self.tmp, ".zaude", "artifacts", "review-ledger.json"),
                              encoding="utf-8"))
         self.assertIn("codex", led["review_seats"])
         self.assertIn("opencode", led["review_seats"])        # the third seat is recorded
+        self.assertIn("kimi", led["review_seats"])            # the fourth seat is recorded
+        self.assertIn("glm", led["review_seats"])             # the fifth seat is recorded
         self.assertEqual(led["unresolved_critical_high"], 0)  # no seat mutated the gate input
 
     def test_opencode_status_command_exits_0(self):
@@ -791,6 +796,245 @@ class OpenCodeGracefulTests(TmpCase):
         r = self._cli("opencode", "--json")
         self.assertEqual(r.returncode, 0)
         self.assertIn("status", json.loads(r.stdout))
+
+
+class KimiGracefulTests(TmpCase):
+    """Kimi is the FOURTH best-effort review seat (Moonshot, kimi-for-coding) — same graceful contract
+    as codex/opencode: never gates, never raises, independent retry state. Mirrors OpenCodeGracefulTests
+    on the seat dict (the gate invariant is what matters, not stderr text)."""
+    import argparse as _ap
+
+    def _cli(self, *a):
+        return subprocess.run([sys.executable, os.path.join(VROOT, "cli.py"), "--path", self.tmp]
+                              + list(a), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def _seat(self, tier, **kw):
+        import cli
+        zd = os.path.join(self.tmp, ".zaude"); os.makedirs(zd, exist_ok=True)
+        args = self._ap.Namespace(kimi=kw.get("kimi", "auto"),
+                                  kimi_verdict=kw.get("kimi_verdict"),
+                                  kimi_summary=kw.get("kimi_summary", ""),
+                                  kimi_error=kw.get("kimi_error"),
+                                  kimi_retry_at=kw.get("kimi_retry_at"))
+        if "probe" in kw:
+            import lib.kimi as ki
+            orig = ki.probe; ki.probe = lambda *a, **k: kw["probe"]
+            try:
+                return cli._kimi_review_seat(zd, args, tier)
+            finally:
+                ki.probe = orig
+        return cli._kimi_review_seat(zd, args, tier)
+
+    def test_low_risk_skips(self):
+        self.assertEqual(self._seat("T1")["reason"], "low_risk")
+
+    def test_verdict_recorded_used_and_enforced(self):
+        s = self._seat("T4", kimi_verdict="concerns", kimi_summary="diverse take")
+        self.assertEqual((s["outcome"], s["verdict"]), ("used", "concerns"))
+        self.assertTrue(s["enforced"])
+
+    def test_off_overrides_verdict(self):
+        s = self._seat("T4", kimi="off", kimi_verdict="pass")
+        self.assertEqual((s["outcome"], s["reason"]), ("skipped", "off"))
+        self.assertFalse(s["enforced"])
+
+    def test_missing_records_unavailable_not_gate(self):
+        s = self._seat("T4", probe={"status": "missing", "version": None, "detail": "no kimi"})
+        self.assertEqual((s["outcome"], s["reason"]), ("unavailable", "missing"))
+        self.assertFalse(s["enforced"])
+
+    def test_present_noauth_records_unavailable(self):
+        s = self._seat("T3", probe={"status": "present_noauth", "version": "1", "detail": "no auth"})
+        self.assertEqual((s["outcome"], s["reason"]), ("unavailable", "present_noauth"))
+
+    def test_ready_no_verdict_is_nudge(self):
+        s = self._seat("T4", probe={"status": "ready", "version": "1", "detail": "ok"})
+        self.assertEqual((s["outcome"], s["reason"]), ("skipped", "available_not_run"))
+        self.assertFalse(s["enforced"])
+
+    def test_no_credit_via_error_arms_independent_backoff(self):
+        import lib.kimi as ki, lib.codex as cx, lib.opencode as oc
+        zd = os.path.join(self.tmp, ".zaude"); os.makedirs(zd, exist_ok=True)
+        s = self._seat("T4", kimi_error="429 rate limit", kimi_retry_at="9999999999")
+        self.assertEqual(s["outcome"], "no_credit")
+        self.assertFalse(ki.due_now(ki.read_status(zd)))      # kimi in backoff
+        self.assertTrue(cx.due_now(cx.read_status(zd)))       # codex UNAFFECTED (independent state)
+        self.assertTrue(oc.due_now(oc.read_status(zd)))       # opencode UNAFFECTED too
+
+    def test_probe_never_raises(self):
+        import lib.kimi as ki
+        self.assertIn(ki.probe().get("status"), (ki.MISSING, ki.PRESENT_NOAUTH, ki.READY))
+
+    # ---- the REAL probe / creds-detection logic (the kimi-specific bit that differs from opencode) ----
+    def test_probe_missing_when_no_binary(self):
+        import lib.kimi as ki
+        ob = ki.binary_path
+        ki.binary_path = lambda: None
+        try:
+            self.assertEqual(ki.probe()["status"], ki.MISSING)
+        finally:
+            ki.binary_path = ob
+
+    def test_probe_ready_when_binary_and_creds_present(self):
+        import lib.kimi as ki
+        creds = os.path.join(self.tmp, ".kimi", "credentials"); os.makedirs(creds, exist_ok=True)
+        with open(os.path.join(creds, "kimi-code.json"), "w", encoding="utf-8") as f:
+            f.write('{"token":"not-read-only-size-checked"}')
+        ob, ov, od = ki.binary_path, ki.cli_version, ki._CREDS_DIR
+        ki.binary_path = lambda: "kimi"; ki.cli_version = lambda *a, **k: "1.48.0"; ki._CREDS_DIR = creds
+        try:
+            pr = ki.probe()
+            self.assertEqual(pr["status"], ki.READY)
+            self.assertEqual(pr["auth_source"], "oauth_creds")
+        finally:
+            ki.binary_path, ki.cli_version, ki._CREDS_DIR = ob, ov, od
+
+    def test_probe_present_noauth_when_binary_but_no_creds(self):
+        import lib.kimi as ki
+        ob, ov, od = ki.binary_path, ki.cli_version, ki._CREDS_DIR
+        ki.binary_path = lambda: "kimi"; ki.cli_version = lambda *a, **k: None
+        ki._CREDS_DIR = os.path.join(self.tmp, "does-not-exist")
+        try:
+            self.assertEqual(ki.probe()["status"], ki.PRESENT_NOAUTH)
+        finally:
+            ki.binary_path, ki.cli_version, ki._CREDS_DIR = ob, ov, od
+
+    def test_creds_present_counts_only_nontrivial_files(self):
+        import lib.kimi as ki
+        creds = os.path.join(self.tmp, "c"); os.makedirs(creds, exist_ok=True)
+        od = ki._CREDS_DIR; ki._CREDS_DIR = creds
+        try:
+            self.assertFalse(ki._creds_present())                          # empty dir -> not logged in
+            with open(os.path.join(creds, "a.json"), "w", encoding="utf-8") as f:
+                f.write("{}")                                              # 2 bytes -> trivial, ignored
+            self.assertFalse(ki._creds_present())
+            with open(os.path.join(creds, "b.json"), "w", encoding="utf-8") as f:
+                f.write('{"t":"abc"}')                                     # >2 bytes -> a real cred
+            self.assertTrue(ki._creds_present())
+        finally:
+            ki._CREDS_DIR = od
+
+    def test_kimi_status_command_exits_0(self):
+        self._cli("init", "--text", "x", "--mode", "enforce")
+        r = self._cli("kimi", "--json")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("status", json.loads(r.stdout))
+
+
+class GlmGracefulTests(TmpCase):
+    """GLM is the FIFTH best-effort review seat (Zhipu/z.ai, run via the claude-code drop-in) — same
+    graceful contract as codex/opencode/kimi: never gates, never raises, independent retry state.
+    TOKEN model (like codex): READY needs a runner AND a z.ai token. Mirrors the seat-dict invariant."""
+    import argparse as _ap
+
+    def _cli(self, *a):
+        return subprocess.run([sys.executable, os.path.join(VROOT, "cli.py"), "--path", self.tmp]
+                              + list(a), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def _seat(self, tier, **kw):
+        import cli
+        zd = os.path.join(self.tmp, ".zaude"); os.makedirs(zd, exist_ok=True)
+        args = self._ap.Namespace(glm=kw.get("glm", "auto"),
+                                  glm_verdict=kw.get("glm_verdict"),
+                                  glm_summary=kw.get("glm_summary", ""),
+                                  glm_error=kw.get("glm_error"),
+                                  glm_retry_at=kw.get("glm_retry_at"))
+        if "probe" in kw:
+            import lib.glm as gl
+            orig = gl.probe; gl.probe = lambda *a, **k: kw["probe"]
+            try:
+                return cli._glm_review_seat(zd, args, tier)
+            finally:
+                gl.probe = orig
+        return cli._glm_review_seat(zd, args, tier)
+
+    def test_low_risk_skips(self):
+        self.assertEqual(self._seat("T1")["reason"], "low_risk")
+
+    def test_verdict_recorded_used_and_enforced(self):
+        s = self._seat("T4", glm_verdict="concerns", glm_summary="diverse take")
+        self.assertEqual((s["outcome"], s["verdict"]), ("used", "concerns"))
+        self.assertTrue(s["enforced"])
+
+    def test_off_overrides_verdict(self):
+        s = self._seat("T4", glm="off", glm_verdict="pass")
+        self.assertEqual((s["outcome"], s["reason"]), ("skipped", "off"))
+        self.assertFalse(s["enforced"])
+
+    def test_missing_records_unavailable_not_gate(self):
+        s = self._seat("T4", probe={"status": "missing", "version": None, "detail": "no runner"})
+        self.assertEqual((s["outcome"], s["reason"]), ("unavailable", "missing"))
+        self.assertFalse(s["enforced"])
+
+    def test_present_noauth_records_unavailable(self):
+        s = self._seat("T3", probe={"status": "present_noauth", "version": "1", "detail": "no token"})
+        self.assertEqual((s["outcome"], s["reason"]), ("unavailable", "present_noauth"))
+
+    def test_ready_no_verdict_is_nudge(self):
+        s = self._seat("T4", probe={"status": "ready", "version": "1", "detail": "ok"})
+        self.assertEqual((s["outcome"], s["reason"]), ("skipped", "available_not_run"))
+        self.assertFalse(s["enforced"])
+
+    def test_no_credit_via_error_arms_independent_backoff(self):
+        import lib.glm as gl, lib.codex as cx, lib.kimi as ki
+        zd = os.path.join(self.tmp, ".zaude"); os.makedirs(zd, exist_ok=True)
+        s = self._seat("T4", glm_error="429 rate limit", glm_retry_at="9999999999")
+        self.assertEqual(s["outcome"], "no_credit")
+        self.assertFalse(gl.due_now(gl.read_status(zd)))      # glm in backoff
+        self.assertTrue(cx.due_now(cx.read_status(zd)))       # codex UNAFFECTED (independent state)
+        self.assertTrue(ki.due_now(ki.read_status(zd)))       # kimi UNAFFECTED too
+
+    def test_probe_never_raises(self):
+        import lib.glm as gl
+        self.assertIn(gl.probe().get("status"), (gl.MISSING, gl.PRESENT_NOAUTH, gl.READY))
+
+    # ---- the REAL probe / token logic (the glm-specific bit: runner + z.ai token) ----
+    def test_probe_missing_when_no_runner(self):
+        import lib.glm as gl
+        ob = gl.binary_path
+        gl.binary_path = lambda: None
+        try:
+            self.assertEqual(gl.probe()["status"], gl.MISSING)
+        finally:
+            gl.binary_path = ob
+
+    def test_probe_ready_when_runner_and_token(self):
+        import lib.glm as gl
+        ob, ov, ots = gl.binary_path, gl.cli_version, gl.token_source
+        gl.binary_path = lambda: "claude"; gl.cli_version = lambda *a, **k: "2.1"
+        gl.token_source = lambda: ("zai-secret", "env")
+        try:
+            pr = gl.probe()
+            self.assertEqual(pr["status"], gl.READY)
+            self.assertEqual(pr["auth_source"], "env")
+        finally:
+            gl.binary_path, gl.cli_version, gl.token_source = ob, ov, ots
+
+    def test_probe_present_noauth_when_runner_but_no_token(self):
+        import lib.glm as gl
+        ob, ov, ots = gl.binary_path, gl.cli_version, gl.token_source
+        gl.binary_path = lambda: "claude"; gl.cli_version = lambda *a, **k: None
+        gl.token_source = lambda: (None, None)
+        try:
+            self.assertEqual(gl.probe()["status"], gl.PRESENT_NOAUTH)
+        finally:
+            gl.binary_path, gl.cli_version, gl.token_source = ob, ov, ots
+
+    def test_have_token_via_env(self):
+        import lib.glm as gl
+        os.environ["ZAI_API_KEY"] = "k-test"
+        try:
+            self.assertTrue(gl.have_token())
+        finally:
+            os.environ.pop("ZAI_API_KEY", None)
+
+    def test_glm_status_command_exits_0(self):
+        self._cli("init", "--text", "x", "--mode", "enforce")
+        r = self._cli("glm", "--json")
+        self.assertEqual(r.returncode, 0)
+        out = json.loads(r.stdout)
+        self.assertIn("status", out)
+        self.assertIn("token", out)
 
 
 class AdaptiveFlowsTests(TmpCase):
@@ -1172,8 +1416,12 @@ class PanelEnforcementTests(TmpCase):
         zd = os.path.join(self.tmp, ".zaude"); os.makedirs(zd, exist_ok=True)
         cs = cli._codex_review_seat(zd, self._ap.Namespace(), "T4")
         os_ = cli._opencode_review_seat(zd, self._ap.Namespace(), "T4")
+        ks = cli._kimi_review_seat(zd, self._ap.Namespace(), "T4")
+        gs = cli._glm_review_seat(zd, self._ap.Namespace(), "T4")
         self.assertIn(cs["outcome"], ("skipped", "unavailable", "no_credit", "used"))
         self.assertIn(os_["outcome"], ("skipped", "unavailable", "no_credit", "used"))
+        self.assertIn(ks["outcome"], ("skipped", "unavailable", "no_credit", "used"))
+        self.assertIn(gs["outcome"], ("skipped", "unavailable", "no_credit", "used"))
 
     def test_panel_skip_block_never_raises_on_bad_shape(self):
         from lib.review_seats import panel_skip_block
@@ -1193,23 +1441,32 @@ class PanelEnforcementTests(TmpCase):
             self.assertEqual(self._cli(*cmd).returncode, 0, cmd)
 
     def _review_inproc(self, ns_kwargs):
-        """Run cli.cmd_review in-process with BOTH probes forced READY (no spawn). Returns rc."""
-        import cli, lib.codex as cx, lib.opencode as oc
+        """Run cli.cmd_review in-process with ALL FOUR external probes forced READY (no spawn).
+        Forcing kimi+glm too keeps the panel-gate locks environment-independent. Returns rc."""
+        import cli, lib.codex as cx, lib.opencode as oc, lib.kimi as ki, lib.glm as gl
         ready = lambda *a, **k: {"status": "ready", "version": "1", "auth_source": "env",
                                  "detail": "ok", "checked_at": time.time()}
         oc_ready = lambda *a, **k: {"status": oc.READY, "version": "1", "detail": "ok"}
-        co, oo = cx.probe, oc.probe
-        cx.probe, oc.probe = ready, oc_ready
+        ki_ready = lambda *a, **k: {"status": ki.READY, "version": "1", "detail": "ok"}
+        gl_ready = lambda *a, **k: {"status": gl.READY, "version": "1", "auth_source": "env",
+                                    "detail": "ok"}
+        co, oo, ko, go = cx.probe, oc.probe, ki.probe, gl.probe
+        cx.probe, oc.probe, ki.probe, gl.probe = ready, oc_ready, ki_ready, gl_ready
         try:
             base = dict(path=self.tmp, summary="", unresolved="0",
                         codex="auto", codex_verdict=None, codex_summary="", codex_error=None,
                         codex_retry_at=None, opencode="auto", opencode_verdict=None,
                         opencode_summary="", opencode_error=None, opencode_retry_at=None,
-                        skip_codex_ack=None, skip_opencode_ack=None)
+                        kimi="auto", kimi_verdict=None, kimi_summary="", kimi_error=None,
+                        kimi_retry_at=None,
+                        glm="auto", glm_verdict=None, glm_summary="", glm_error=None,
+                        glm_retry_at=None,
+                        skip_codex_ack=None, skip_opencode_ack=None, skip_kimi_ack=None,
+                        skip_glm_ack=None)
             base.update(ns_kwargs)
             return cli.cmd_review(self._ap.Namespace(**base))
         finally:
-            cx.probe, oc.probe = co, oo
+            cx.probe, oc.probe, ki.probe, gl.probe = co, oo, ko, go
 
     def _ledger_path(self):
         return os.path.join(self.tmp, ".zaude", "artifacts", "review-ledger.json")
@@ -1234,25 +1491,51 @@ class PanelEnforcementTests(TmpCase):
         self.assertFalse(os.path.exists(self._ledger_path()))
         self.assertEqual(self._current_state(), "Tested")
 
+    def test_clean_T4_kimi_off_alone_refuses(self):
+        # the 4th seat must itself participate in the gate: kimi off (no ack) at a clean T4 refuses,
+        # even though codex+opencode are fine. Proves kimi's entry in the early off/never refusal loop.
+        self._to_tested_T4()
+        rc = self._review_inproc({"unresolved": "0", "kimi": "off"})
+        self.assertEqual(rc, 3)
+        self.assertFalse(os.path.exists(self._ledger_path()))
+        self.assertEqual(self._current_state(), "Tested")
+
+    def test_clean_T4_glm_off_alone_refuses(self):
+        # the 5th seat must itself participate in the gate: glm off (no ack) at a clean T4 refuses,
+        # even though codex+opencode+kimi are fine. Proves glm's entry in the early refusal loop.
+        self._to_tested_T4()
+        rc = self._review_inproc({"unresolved": "0", "glm": "off"})
+        self.assertEqual(rc, 3)
+        self.assertFalse(os.path.exists(self._ledger_path()))
+        self.assertEqual(self._current_state(), "Tested")
+
     def test_clean_T4_with_acks_records_and_ledger_carries_ack(self):
         self._to_tested_T4()
-        rc = self._review_inproc({"unresolved": "0", "codex": "off", "opencode": "off",
+        rc = self._review_inproc({"unresolved": "0", "codex": "off", "opencode": "off", "kimi": "off",
+                                  "glm": "off",
                                   "skip_codex_ack": "offline box",
-                                  "skip_opencode_ack": "offline box"})
+                                  "skip_opencode_ack": "offline box",
+                                  "skip_kimi_ack": "offline box",
+                                  "skip_glm_ack": "offline box"})
         self.assertEqual(rc, 0)
         led = json.load(open(self._ledger_path(), encoding="utf-8"))
         self.assertEqual(led["review_seats"]["codex"]["skip_ack"], "offline box")
         self.assertEqual(led["review_seats"]["opencode"]["skip_ack"], "offline box")
+        self.assertEqual(led["review_seats"]["kimi"]["skip_ack"], "offline box")
+        self.assertEqual(led["review_seats"]["glm"]["skip_ack"], "offline box")
         self.assertEqual(self._current_state(), "Reviewed")
 
     def test_clean_T4_with_verdicts_records(self):
         self._to_tested_T4()
         rc = self._review_inproc({"unresolved": "0", "codex_verdict": "pass",
-                                  "opencode_verdict": "pass"})
+                                  "opencode_verdict": "pass", "kimi_verdict": "pass",
+                                  "glm_verdict": "pass"})
         self.assertEqual(rc, 0)
         led = json.load(open(self._ledger_path(), encoding="utf-8"))
         self.assertEqual(led["review_seats"]["codex"]["outcome"], "used")
         self.assertEqual(led["review_seats"]["opencode"]["outcome"], "used")
+        self.assertEqual(led["review_seats"]["kimi"]["outcome"], "used")
+        self.assertEqual(led["review_seats"]["glm"]["outcome"], "used")
 
     def test_unresolved_gt_zero_bypasses_panel_gate(self):
         # not a clean review -> the panel gate must NOT engage (the ship gate already blocks it).
@@ -1265,38 +1548,44 @@ class PanelEnforcementTests(TmpCase):
     def test_absent_probes_clean_still_records(self):
         # best-effort preserved: when both probes are MISSING (un-runnable), a clean review records.
         self._to_tested_T4()
-        import cli, lib.codex as cx, lib.opencode as oc
+        import cli, lib.codex as cx, lib.opencode as oc, lib.kimi as ki, lib.glm as gl
         miss = lambda *a, **k: {"status": "missing", "version": None, "auth_source": None,
                                 "detail": "absent", "checked_at": time.time()}
         oc_miss = lambda *a, **k: {"status": oc.MISSING, "version": None, "detail": "absent"}
-        co, oo = cx.probe, oc.probe
-        cx.probe, oc.probe = miss, oc_miss
+        ki_miss = lambda *a, **k: {"status": ki.MISSING, "version": None, "detail": "absent"}
+        gl_miss = lambda *a, **k: {"status": gl.MISSING, "version": None, "detail": "absent"}
+        co, oo, ko, go = cx.probe, oc.probe, ki.probe, gl.probe
+        cx.probe, oc.probe, ki.probe, gl.probe = miss, oc_miss, ki_miss, gl_miss
         try:
             rc = cli.cmd_review(self._ap.Namespace(path=self.tmp, summary="", unresolved="0"))
         finally:
-            cx.probe, oc.probe = co, oo
+            cx.probe, oc.probe, ki.probe, gl.probe = co, oo, ko, go
         self.assertEqual(rc, 0)
         led = json.load(open(self._ledger_path(), encoding="utf-8"))
         self.assertEqual(led["review_seats"]["codex"]["outcome"], "unavailable")
+        self.assertEqual(led["review_seats"]["kimi"]["outcome"], "unavailable")
+        self.assertEqual(led["review_seats"]["glm"]["outcome"], "unavailable")
         self.assertEqual(self._current_state(), "Reviewed")
 
     def test_probe_that_raises_degrades_and_never_blocks(self):
         # a probe that RAISES degrades the seat to unavailable(seat_error) -> never blocks a clean
         # review (the panel gate only fires on a real available-but-skipped seat).
         self._to_tested_T4()
-        import cli, lib.codex as cx, lib.opencode as oc
+        import cli, lib.codex as cx, lib.opencode as oc, lib.kimi as ki, lib.glm as gl
         def boom(*a, **k):
             raise RuntimeError("probe blew up")
-        co, oo = cx.probe, oc.probe
-        cx.probe, oc.probe = boom, boom
+        co, oo, ko, go = cx.probe, oc.probe, ki.probe, gl.probe
+        cx.probe, oc.probe, ki.probe, gl.probe = boom, boom, boom, boom
         try:
             rc = cli.cmd_review(self._ap.Namespace(path=self.tmp, summary="", unresolved="0"))
         finally:
-            cx.probe, oc.probe = co, oo
+            cx.probe, oc.probe, ki.probe, gl.probe = co, oo, ko, go
         self.assertEqual(rc, 0)
         led = json.load(open(self._ledger_path(), encoding="utf-8"))
         self.assertEqual(led["review_seats"]["codex"]["outcome"], "unavailable")
         self.assertEqual(led["review_seats"]["codex"]["reason"], "seat_error")
+        self.assertEqual(led["review_seats"]["kimi"]["reason"], "seat_error")
+        self.assertEqual(led["review_seats"]["glm"]["reason"], "seat_error")
         self.assertEqual(self._current_state(), "Reviewed")
 
 
@@ -1309,6 +1598,8 @@ class OnboardGitignoreTests(TmpCase):
         gi = open(os.path.join(self.tmp, ".gitignore"), encoding="utf-8").read()
         self.assertIn(".zaude/codex.json", gi)
         self.assertIn(".zaude/opencode.json", gi)        # the entry the fresh-init list missed
+        self.assertIn(".zaude/kimi.json", gi)            # the fourth seat's health cache
+        self.assertIn(".zaude/glm.json", gi)             # the fifth seat's health cache
         self.assertIn(".zaude/memory/", gi)
 
     def test_existing_git_project_still_gets_entries(self):

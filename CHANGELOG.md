@@ -4,6 +4,44 @@ All notable changes to Zaude are documented here. This project follows [Keep a C
 
 ---
 
+## [3.0.0] — 2026-06-25 — "Zaude 3"
+
+Zaude 3 makes the Zaude 2 enforcement engine **autonomous and self-reviewing**. The signed-trace
+kernel is unchanged at its core (CURRENT kernel version **v0.2.0**); 3.0.0 is the product
+*generation* that adds intent routing, adaptive flows, an autonomous multi-item loop, the
+operator-learning layer, and a five-seat model-diverse review panel on top of it.
+
+### Added
+
+- **Intent routing (always-on).** A `UserPromptSubmit` hook maps every plain-language request to the
+  right command plus a **safety mode** — `auto` (read-only, runs), `propose` (mutating, proceeds),
+  `confirm` (destructive, always asks; a destructive command can never auto-run). You type a
+  `/command` only to override. Kill switch: `~/.zaude/disabled` or `ZAUDE_DISABLE=1`. (`zaude route`.)
+- **Adaptive task-typed flows.** `zflow` / `zflow-finish` open and close a `bugfix` / `audit` /
+  `research` / `grooming` / `build` flow — Intake → first real-work state in one signed step, with
+  `n/a` stages recorded honestly and the evidence gate kept for release flows.
+- **Autonomous multi-item loop.** A GitHub Projects board (`zboard`, `zboard-next`) where each
+  promoted item gets its **own single-track signed sub-trace** under `.zaude/items/<id>/`
+  (`zitem-activate`), with a board-level Definition-of-Done (`zboard-dod`).
+- **Operator-learning layer.** A **persona** that learns to decide as the operator would (advisory
+  only — never overrides an explicit instruction or a safety gate; confirmed-belief model with decay
+  + drift flagging) and a searchable **collective memory** (`zremember` / `zrecall`). Both
+  operator-private, secret-redacted, never pushed.
+- **Model-diverse review panel — five seats.** `claude lenses` (code-reviewer / architect-review /
+  security-auditor) + **Codex** (GPT) + **OpenCode** + **Kimi** (Moonshot) + **GLM** (Zhipu/z.ai).
+  All best-effort and **never gate** (the ship gate reads only `unresolved_critical_high`); a
+  **panel-completeness** rule refuses a *clean* T3/T4 review when an AVAILABLE seat was silently
+  skipped (run it or record `--skip-<seat>-ack`). Status views: `zcodex` / `zopencode` / `zkimi` /
+  `zglm`. Seats authenticate independently and are added one at a time.
+- **262 kernel tests** (63 kernel + 151 features + 48 board).
+
+### Notes
+
+- Versioning has two axes: the **generation** (Zaude 3) and the **kernel** semver (`CURRENT` = 0.2.0).
+  The installer is still named `install-zaude2.*` because it installs the enforcement-kernel lineage;
+  `install.sh` / `install.ps1` remain the Zaude 1 (conventions-only) installer.
+- Fully additive — the Zaude 1 conventions and the Zaude 2 engine are unchanged and still documented.
+
 ## [2.0.0] - 2026-06-13
 
 Zaude 2.0 is a new **enforcement engine**. Zaude 1 layered hooks + conventions on top of Claude

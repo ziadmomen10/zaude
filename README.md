@@ -6,113 +6,169 @@
 
 ### Don't vibe code. Zaude code.
 
-**A Claude Code framework for people who ship to production.**
+**The autonomous, self-governing layer on top of Claude Code — for people who ship to production.**
 
 [![CI](https://github.com/ziadmomen10/zaude/actions/workflows/ci.yml/badge.svg)](https://github.com/ziadmomen10/zaude/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/License-MIT-5e6ad2.svg)](./LICENSE)
 [![Trademark](https://img.shields.io/badge/Zaude-%E2%84%A2-8a8f98.svg)](./TRADEMARK.md)
-[![Version 2.0.0](https://img.shields.io/badge/version-2.0.0-5e6ad2.svg)](./CHANGELOG.md)
+[![Generation: Zaude 3](https://img.shields.io/badge/generation-Zaude%203-5e6ad2.svg)](#what-is-zaude-3)
+[![Kernel v0.2.0](https://img.shields.io/badge/kernel-v0.2.0-8a8f98.svg)](#version)
 [![Claude Code compatible](https://img.shields.io/badge/Claude%20Code-compatible-5e6ad2.svg)](https://claude.com/claude-code)
 [![Status: active](https://img.shields.io/badge/status-active-10b981.svg)](#)
-[![PRs welcome](https://img.shields.io/badge/PRs-welcome-10b981.svg)](./CONTRIBUTING.md)
 
-[What's new in 2.0](#whats-new-in-20) · [Quickstart](#quickstart) · [How it feels](#a-real-session-with-zaude-2) · [Architecture](#architecture) · [Docs](./docs/) · [FAQ](#faq)
+[Quickstart](#quickstart) · [What is Zaude 3](#what-is-zaude-3) · [How you use it](#how-you-actually-use-it) · [The review panel](#the-model-diverse-review-panel) · [Commands](#command-reference) · [Architecture](#architecture) · [Docs](./docs/) · [FAQ](#faq)
 
 </div>
 
 ---
 
-## Why this exists
-
-Claude Code is capable. Use it on a real project for a few weeks and you hit three walls:
-
-1. **Every new session starts cold.** Claude forgets everything you did last week.
-2. **Nothing stops you from shipping unreviewed code.** It'll happily write, commit, and push on request.
-3. **Three weeks later, neither of you remembers why you chose approach X over Y.** The decisions live in conversation logs you can't search.
-
-Zaude 1 closed those holes with hooks, slash commands, and vault conventions — the rule was **hooks enforce, skills suggest. If it matters, it's in a hook.** It worked. But a slash command can still be skipped: say "just ship it" and the review never runs.
-
-**Zaude 2.0 finishes the thought.** The whole workflow becomes a deterministic **kernel** that gates Claude Code's *tools*, not its prompts. The LLM can ask for a tool; a Python `PreToolUse` hook decides whether it's allowed based on where the work actually is in its lifecycle. "Just ship it" stops being a casual habit: you can't reach a release token without walking the signed review→verify chain, and the deploy tool path is gated on that token. (The deploy check is an honest **tripwire** for the common deploy commands, not an un-escapable sandbox — the real boundary is the state machine; see the [threat model](./docs/18-threat-model.md) for exactly what is and isn't defended.)
-
----
-
-## What's new in 2.0
-
-| | Zaude 1 (still here, in [`docs/`](./docs/)) | **Zaude 2.0 (the engine)** |
-|---|---|---|
-| Enforcement | A few hooks (frozen-guard, vault-sync, freshness) | A **workflow state machine** + risk-scaled gates over every tool call |
-| Source of truth | Vault markdown + session logs | **Tamper-evident `trace.jsonl`** (hash-chain + HMAC); `state.json` is a rebuildable projection |
-| "Done" | Convention | An **evidence gate** — can't reach Released without a recorded test exit code + a verification record (driver-**attested**, cross-checked by the `evidence-verifier` agent; the kernel can't run your tests for you) |
-| Small work | Same ceremony as big work | A **risk-tier fast lane** — trivial work flows; only T3/T4 gets the full lifecycle |
-| Backlog | In your head / a doc | A **GitHub Projects v2 board** (Intake → promote → ship), synced to trace + vault + memory |
-| Config | Hand-maintained files | One **`policy.json`** that *generates* the slash commands, agents, and the hook |
-| Setup | `install/install.sh` | A **portable kernel** + `install-zaude2.sh` / `.ps1` + `zaude update` |
-
-Zaude 2.0 keeps everything Zaude 1 stood for — persistent memory, durable workflow, production discipline — and makes the workflow part *enforced by an engine* instead of *honored by convention*.
-
----
-
-## The operator-learning layer
-
-Zaude is the layer **on top of Claude Code** that makes development easier with fewer errors and less effort — the "C++ on C" idea. Three capabilities turn the workflow engine into something that adapts to *you*:
-
-- **Intent routing — say what you want, not which command.** You don't memorize ~35 slash-commands. Describe the goal; `zaude route "<text>"` maps it to the right command plus a **safety mode**: read-only commands auto-run, mutating ones propose, **destructive ones always confirm** (structurally — a destructive command can never auto-run).
-- **Persona — decide *as the operator would*.** In autonomous mode Zaude loads a distilled, **confirmed** profile of how you decide (preferences, rules, risk posture), learned from your recorded decisions. It's *managed* memory: a belief is confirmed only after it's reinforced (repetition gates noise), confidence decays with staleness, and preference *drift* is flagged rather than silently overwritten. Operator-private, secret-redacted, never pushed. `zaude persona`.
-- **Collective memory — learn the lessons.** A searchable store of facts/lessons/decisions with deterministic recall (`zaude remember`, `zaude recall`). The signed trace stays the episodic source of truth; this is derived, retrievable context.
-
-Everything here is **advisory + bounded + private**: it informs autonomous judgment, never overrides an explicit instruction or a safety gate, and every persisted string is redacted in the kernel. Design + research: [`docs/16-operator-learning-layer.md`](./docs/16-operator-learning-layer.md).
-
-> Agents pair with the workflow. Zaude generates its own capability agents (evidence-verifier, supply-chain-auditor, ui-design-implementer) and `zaude agents` reports which **external** review/build agents are installed vs missing — install a multi-harness set such as [`wshobson/agents`](https://github.com/wshobson/agents) (spans Claude **and Codex**) so the review panel stays whole.
+Zaude turns Claude Code into a workflow that **enforces quality, remembers everything, and drives itself.** It's not a plugin and it never calls an API — it's a small, stdlib-only Python **kernel** plus a few Claude Code hooks. You describe what you want in plain language; Zaude routes it to the right step, walks a signed review→verify→ship lifecycle you can't accidentally skip, and reviews the result with a **panel of different AI models**. Then it picks up next session right where you left off, with the reasons intact.
 
 ---
 
 ## Quickstart
 
-**You need:** Claude Code, `git`, and Python 3.
+**Prerequisites:** [Claude Code](https://claude.com/claude-code), `git`, Python 3.
+
+**1 — Install the kernel** (≈30 s, fully reversible with `zaude uninstall`):
 
 ```bash
 git clone https://github.com/ziadmomen10/zaude
-bash zaude/install-zaude2.sh                          # lays the kernel into ~/.zaude
-python "$HOME/.zaude/bin/zaude.py" gen                # generate the /z* commands + agents
-python "$HOME/.zaude/bin/zaude.py" install --yes      # optional: wire them into ~/.claude (z-prefixed)
+bash zaude/install-zaude2.sh                        # lay the kernel into ~/.zaude
+python "$HOME/.zaude/bin/zaude.py" gen              # generate the /z* commands + agents
+python "$HOME/.zaude/bin/zaude.py" install --yes    # wire them into ~/.claude (z-prefixed)
+```
+*Windows:* `powershell -ExecutionPolicy Bypass -File zaude\install-zaude2.ps1`, then the same `gen` + `install`.
+
+**2 — Onboard one project** (the kernel ignores every project that hasn't been onboarded):
+
+```bash
+cd ~/my-app && claude
+> /zonboard --mode shadow     # scaffold + watch: logs what it WOULD gate, blocks NOTHING
+# …work normally for a while, build trust…
+> /zonboard                   # re-run to switch enforcement ON (enforce is the default)
 ```
 
-Windows: `powershell -ExecutionPolicy Bypass -File zaude\install-zaude2.ps1`.
+**3 — Just talk to it.** No command memorization — describe the goal and routing does the rest:
 
-The hook **fails open** — projects without a `.zaude/` directory are completely untouched, and you onboard new projects in **shadow mode** first (it logs what it *would* gate, blocks nothing) before you promote to enforce. Add a GitHub PAT at `~/.zaude/secrets/github-pat` (never committed) to light up the PM board.
+```text
+> where did we leave off?
+> add a CSV export of the employee directory for payroll
+> ship it
+```
 
-> Looking for Zaude 1 (the markdown/hooks framework)? It's unchanged and fully documented in [`docs/`](./docs/) and [`install/`](./install/).
+That's the whole loop. Everything below explains what's happening under the hood.
+
+> Optional: drop a GitHub PAT at `~/.zaude/secrets/github-pat` to light up the [PM board](#command-reference), and authenticate any [review-panel seats](#the-model-diverse-review-panel) you want.
+
+<a name="version"></a>
+> **Version note.** **Zaude 3** is the current *generation* (autonomous, intent-routed, model-diverse review). The enforcement *kernel* it runs on is independently versioned — currently **v0.2.0**. The installer is named `install-zaude2.*` because it installs that enforcement-kernel lineage; the legacy `install.sh` / `install.ps1` are the original **Zaude 1** (conventions-only) installer.
 
 ---
 
-## A real session with Zaude 2
+## Why this exists
+
+Use Claude Code on a real project for a few weeks and you hit four walls:
+
+1. **Every session starts cold** — it forgets what you did last week.
+2. **Nothing stops it shipping unreviewed code** — say "just ship it" and it will.
+3. **One reviewer, one blind spot** — a single model misses what a different model would catch.
+4. **You babysit the workflow** — typing the same commands, re-explaining the same decisions.
+
+**Zaude 1** closed the memory + workflow gaps by *convention*. **Zaude 2** turned the workflow into an *enforcement engine* — a signed state machine that gates Claude Code's *tools*, so process can't be skipped, only logged-and-waived. **Zaude 3** makes that engine **autonomous and self-reviewing**.
+
+---
+
+## What is Zaude 3
+
+Three capabilities turn the enforcement engine into something that runs *itself*:
+
+### 🧭 Intent routing — say what you want, not which command
+You don't memorize the dozens of slash-commands. A `UserPromptSubmit` hook reads every plain-language request, maps it to the right command, and tags it with a **safety mode**:
+
+| Mode | When | Behavior |
+|---|---|---|
+| **auto** | read-only / safe | runs and reports |
+| **propose** | mutating | does the work, keeps going; hard-stops only on a real risk |
+| **confirm** | destructive / irreversible | **always asks first — structurally; a destructive command can never auto-run** |
+
+You type a `/command` only to *override* the routing. Kill switch: `~/.zaude/disabled` or `ZAUDE_DISABLE=1` silences it instantly.
+
+### 🔀 Adaptive flows — ceremony scaled to risk
+One size never fit all work. Zaude opens a **task-typed flow** (`bugfix` / `audit` / `research` / `grooming` / `build`) that records only the stages that matter and honestly marks the ones that don't. A trivial fix takes the **fast lane** (two commands); an auth migration walks the full design → review → verify → ship chain. Risk tiers **T0–T4** decide which — light by default, strict only when the work is actually risky.
+
+### 👥 A model-diverse review panel — five seats, no single point of failure
+High-risk work is reviewed by **five independent seats**, each forming its own verdict: **Claude lenses** (code-reviewer / architect-review / security-auditor) + **Codex** (GPT) + **OpenCode** + **Kimi** (Moonshot) + **GLM** (Zhipu). Uncorrelated models catch what one model can't. They're *best-effort* — a missing or rate-limited reviewer never blocks you — but an **available** reviewer can't be *silently* dropped on risky work. [Details ↓](#the-model-diverse-review-panel)
+
+**The foundation under all three** is the Zaude 2 kernel: an append-only, hash-chained + HMAC'd **`trace.jsonl`** is the single source of truth; `state.json`, the GitHub board, the vault, and the memory index are all rebuildable **projections** of it. The LLM narrates; the kernel decides. A forged or hand-edited transition fails closed.
+
+Plus the **operator-learning layer**: a **persona** that learns to *decide as you would* (advisory only — it never overrides an explicit instruction or a safety gate) and a searchable **collective memory** of lessons and decisions. Both are operator-private, secret-redacted, and never pushed.
+
+---
+
+## How you actually use it
+
+The point of Zaude 3 is that you **stop driving the workflow by hand.** A real session:
 
 ```text
-$ cd ~/ultahr && claude
+$ cd ~/my-app && claude
 
-> /zstart
-  Project ultahr — state: Released · risk T2 · 2 ideas in Intake · backlog board synced
+> where did we leave off?
+  [Zaude route] /zstart (auto)
+  Project my-app — state: Released · risk T2 · 2 ideas in Intake · board synced.
 
-# you drop an idea into your Intake column (GitHub or one command)
-> /zintake "export the employee directory as CSV for payroll"
-  intake ZI-004 added.
+> add a CSV export of the employee directory for payroll
+  [Zaude route] /zbuild (propose)
+  → plan → design (architect-review) → risk T2 → implement → tests 8/8 green
+  → review panel: Claude + Codex + Kimi + GLM … 1 HIGH (Codex) fixed → clean
+  → verified. ready to ship.
 
-# you say "work on it" — the agent does the PM busywork
-> /zpromote ZI-004 ...
-  ZI-004 -> Feature ZA-2026-00002 (user story + acceptance criteria + 3 tech-tasks). Backlog.
-
-# the agent tries to write code on a fresh, risky task...
-  [Zaude BLOCKED] src/export.py — design-before-impl: high-risk work needs /design + /approve first.
-
-# ...follows the process (or, for small work, /zfast collapses it to one step)
-> /zapprove ...
-> ...implement... run tests...  8/8 green
-> /zship
-  refused — review ledger not clean. (runs the panel, fixes, retries)
-  Released. deploy token issued. board card -> Released. trace: 14 signed rows.
+> ship it
+  [Zaude route] /zship (confirm)  ⚠ destructive — confirm? (y/N)
 ```
 
-You can't write source on risky work before it's designed. You can't ship before tests pass. The board, the vault, and the signed trace stay in sync the whole time. For a one-line fix, `/zfast` + `/zfast-ship` does it in two commands — the engine is light by default and only tightens when the work is actually risky.
+The kernel keeps you honest:
+
+- You **can't write source on high-risk work** before it's designed and approved (the `PreToolUse` hook blocks the edit).
+- You **can't reach a release token** without a recorded passing test exit code + a verification record (the evidence gate — *driver-attested*, cross-checked by the `evidence-verifier` agent; the kernel can't run your tests for you).
+- The panel **can't be silently skipped** on T3/T4 work.
+
+For a one-line fix the fast lane collapses all of it to `/zfast` + `/zfast-ship`. Every transition lands in the signed trace, and the board, vault, decision log, and memory stay in sync — so next session (after a `git clone` + install on a new machine, or in place) it resumes with the reasons intact.
+
+> Prefer to drive manually? Every step is still a real command (`/zplan`, `/zdesign`, `/zreview`, …). Routing is a convenience, not a cage.
+
+---
+
+## The model-diverse review panel
+
+The headline Zaude 3 upgrade. On T3/T4 work, `/zreview` convenes up to five seats — each reviews independently, then Claude (as lead) synthesizes the verdicts:
+
+| Seat | Model | Role | Authenticate with |
+|---|---|---|---|
+| **Claude lenses** | session model | code-reviewer · architect-review · security-auditor | *(none — built in)* |
+| **Codex** | GPT (5.x) | second, uncorrelated correctness reviewer | `codex login` |
+| **OpenCode** | provider-agnostic | model-diverse breadth (Gemini / GPT / local) | `opencode auth login` |
+| **Kimi** | Moonshot `kimi-for-coding` | whole-repo / long-spec comprehension | `kimi login` |
+| **GLM** | Zhipu / z.ai | extra diverse voice (via a `claude-glm` drop-in) | z.ai key → `~/.zaude/secrets/zai` |
+
+**Honest by design.** Seats are best-effort and **never gate** — the ship gate reads only your *unresolved CRITICAL/HIGH* count, which the driver folds verdicts into. A genuinely-unavailable reviewer (not installed / not logged in / out of credit) is recorded and skipped without blocking. But an **available-but-skipped** seat on risky work blocks a "clean" review until you actually run it or record a deliberate `--skip-<seat>-ack`. Check any seat with `/zcodex`, `/zopencode`, `/zkimi`, `/zglm`. **Add seats one at a time** — the panel widens, the contract stays identical, and zero external seats just means the Claude lenses review alone.
+
+---
+
+## Command reference
+
+You rarely type these (routing does) — but here's the map. `/z*` slash commands wrap `python "$HOME/.zaude/bin/zaude.py" <cmd>`.
+
+| Group | Commands |
+|---|---|
+| **Setup / resume** | `/zonboard` · `/zstart` · `/zstatus` · `/zdoctor` |
+| **Lifecycle** | `/zclarify` → `/zprioritize` → `/zplan` → `/zdesign` → `/zclassify-risk` → `/zapprove` → `/zimplement` → `/ztest` → `/zreview` → `/zverify` → `/zshippable` → `/zship` → `/zclose` |
+| **Fast / adaptive** | `/zfast` · `/zfast-ship` · `/zflow` · `/zflow-finish` |
+| **Autonomous build** | `/zbuild` (plan→…→verify, driven to done-with-evidence) · `/znext` · `/zdod` |
+| **Board (multi-item)** | `/zboard` · `/zintake` · `/zpromote` · `/zitem-activate` · `/zboard-next` · `/zboard-dod` · `/zpm-sync` |
+| **Review seats** | `/zcodex` · `/zopencode` · `/zkimi` · `/zglm` |
+| **Memory / persona** | `/zremember` · `/zrecall` · `/zpersona` |
+| **Integrity** | `/ztrace-verify` · `/zrepair` · `/zwaive` (logged gate bypass) |
 
 ---
 
@@ -120,114 +176,89 @@ You can't write source on risky work before it's designed. You can't ship before
 
 ```mermaid
 flowchart LR
-    U["You"] -->|/z* command| CC["Claude Code"]
+    U["You — plain language"] -->|UserPromptSubmit hook| R["intent router<br/>command + safety mode"]
+    R -->|/z* command| CC["Claude Code"]
     CC -->|tool request| K
 
-    subgraph K["Zaude 2.0 kernel (~/.zaude)"]
+    subgraph K["Zaude kernel (~/.zaude · stdlib only)"]
       direction TB
       HOOK["PreToolUse hook<br/>fail-open · per-project mode"]
-      SM["state machine + risk-scaled gates<br/>design · evidence · deploy-token · secret"]
+      SM["state machine + risk-scaled gates<br/>design · evidence · deploy-token · panel"]
       TR["trace.jsonl<br/>append-only · hash-chain + HMAC"]
       ST["state.json<br/>projection (rebuildable)"]
     end
-
     HOOK --> SM --> TR
     TR -.rebuilds.-> ST
 
-    subgraph OUT["kept in sync"]
-      GH["GitHub Projects v2 board<br/>Intake to Released"]
-      VA["vault backlog.md + decisions"]
-      ME["memory index"]
+    subgraph P["review panel (best-effort · never gates)"]
+      direction TB
+      CL["Claude lenses"]; CX["Codex"]; OC["OpenCode"]; KI["Kimi"]; GL["GLM"]
     end
-    TR --> GH
-    TR --> VA
-    TR --> ME
+    SM -.convenes on T3/T4.-> P
+
+    subgraph OUT["kept in sync (projections of the trace)"]
+      GH["GitHub Projects board"]; VA["vault + decisions"]; ME["memory index"]
+    end
+    TR --> GH & VA & ME
 
     style K fill:#1a1b2e,stroke:#5e6ad2,color:#f7f8f8
+    style P fill:#16161e,stroke:#10b981,color:#f7f8f8
     style OUT fill:#0f1011,stroke:#8a8f98,color:#f7f8f8
     style CC fill:#191a1b,stroke:#62666d,color:#f7f8f8
+    style R fill:#191a1b,stroke:#62666d,color:#f7f8f8
     style U fill:#191a1b,stroke:#62666d,color:#f7f8f8
 ```
 
-One append-only, signed trace is the source of truth; everything else (state, the board, the vault mirror, the memory index) is a projection of it. The LLM narrates; the hooks decide. Deeper walkthrough in [**docs/15-zaude-2-engine.md**](./docs/15-zaude-2-engine.md).
+Deeper dives: [**docs/15** — the enforcement kernel](./docs/15-zaude-2-engine.md), [**docs/16** — routing, persona & memory](./docs/16-operator-learning-layer.md), [**docs/17** — the agent ecosystem](./docs/17-agent-ecosystem.md), [**docs/18** — the threat model](./docs/18-threat-model.md) (what the gates honestly do and don't defend).
 
 ---
 
 ## Compared to the alternatives
 
-| | Raw Claude Code | `CLAUDE.md` alone | Zaude 1 | **Zaude 2.0** |
-|---|---|---|---|---|
-| Cross-session memory | None | Manual | Mechanical | **Mechanical + signed** |
-| Append-only decision log | No | Manual | Yes | **Tamper-evident trace** |
-| Review gate before commit | No | Manual | Enforced (skippable cmd) | **Tool-gated; skippable only via a logged `/zwaive`** |
-| "Done" requires evidence | No | No | No | **Yes — driver-attested + agent-checked** |
-| Risk-scaled (small work flows) | n/a | n/a | No | **Yes (fast lane)** |
-| GitHub Projects backlog | No | No | No | **Yes (synced both ways)** |
-| Portable install + update | Manual | Manual | install.sh | **kernel + `zaude update`** |
-
----
-
-## Documentation
-
-Zaude 1's full user guide is in [`docs/`](./docs/) (chapters 01–14) and stays accurate. Zaude 2.0 adds:
-
-| | Chapter | Topic |
-|---|---|---|
-| 15 | [The 2.0 engine](./docs/15-zaude-2-engine.md) | Kernel, state machine, trace, gates, fast lane, install/update |
-| 16 | [The operator-learning layer](./docs/16-operator-learning-layer.md) | Intent routing, persona, collective memory — research, design, privacy model |
-| 17 | [The agent ecosystem](./docs/17-agent-ecosystem.md) | The three review-panel seats (Claude + Codex + OpenCode) + the ranked capability-agent sources |
-| 18 | [Threat model](./docs/18-threat-model.md) | What Zaude defends vs doesn't — the attacker matrix, trust boundaries, honest scope of the gates |
-
-The original chapters (architecture, vault, commands, hooks, memory, agents, workflow, best practices) describe the conventions Zaude 2.0 builds on and still honors.
+| | Raw Claude Code | `CLAUDE.md` alone | Zaude 1 | Zaude 2 | **Zaude 3** |
+|---|---|---|---|---|---|
+| Cross-session memory | None | Manual | Mechanical | Mechanical + signed | **+ persona + recall** |
+| Review before commit | No | Manual | Skippable command | Tool-gated | **5-model panel; no silent skip** |
+| "Done" requires evidence | No | No | No | Yes | **Yes (attested + agent-checked)** |
+| Risk-scaled / fast lane | n/a | n/a | No | Yes | **Yes + adaptive task flows** |
+| Drives itself | No | No | No | No | **Yes — intent-routed + autonomous loop** |
+| Source of truth | — | files | vault md | signed trace | **signed trace (+ per-item sub-traces)** |
 
 ---
 
 ## FAQ
 
-**Is Zaude 2.0 a plugin?** No — same as Zaude 1. Nothing is installed *inside* Claude Code. The kernel is a set of `~/.zaude/` Python files (stdlib only) plus one `PreToolUse` hook. Uninstall with `zaude uninstall`.
+**Is this a plugin?** No. Nothing is installed *inside* Claude Code — the kernel is `~/.zaude/` Python (stdlib only) plus a couple of hooks. Uninstall: `zaude uninstall`.
 
-**Will it touch my existing projects?** No. The hook fails open: any directory without a `.zaude/` marker is untouched. You onboard projects deliberately, in shadow mode first.
+**Will it touch my existing projects?** No. The hook fails open: any directory without a `.zaude/` marker is untouched. You onboard deliberately, and shadow mode lets you watch before it gates anything.
 
-**Does the engine slow Claude down?** The hook runs only on file-mutating tools and targets <150 ms. Non-onboarded projects exit instantly.
+**Does Zaude call the Anthropic API?** No — it runs entirely inside Claude Code. (The *review seats* call their own providers only when you've authenticated them, and never block you if you haven't.)
 
-**Does Zaude call the Anthropic API?** No. It runs entirely inside Claude Code.
+**Do the extra review models cost money?** Only the ones you enable, and only if your plan with that provider is metered. No external seats configured = the Claude lenses review alone. Nothing is required.
 
-**Where does the persona / collective memory live — is it pushed anywhere?** No. Both are operator-private under `.zaude/persona/` and `.zaude/memory/` (gitignored, `0700`/`0600`), every persisted string is secret-redacted in the kernel, and nothing in them is ever committed or synced. They inform autonomous judgment locally; they never leave the machine.
+**Does the autonomy ever do something destructive on its own?** No. Destructive commands are *structurally* `confirm`-mode — they can never auto-run. The persona is advisory only; an explicit instruction and a safety gate always win.
 
-**Does the persona ever override what I tell it to do?** No. It's advisory only — it informs *autonomous* decisions when you haven't said how. An explicit instruction and a safety gate always win.
+**Where do persona / memory live — are they pushed?** Operator-private under `.zaude/persona/` and `.zaude/memory/` (gitignored), every persisted string secret-redacted, never committed or synced.
 
-**Do I lose Zaude 1?** No. v1's hooks, commands, templates, and docs are all still here. v2 is the engine; you can run the v1 conventions alongside it.
+**Do I lose Zaude 1 / 2?** No — the kernel is additive. The v1 conventions and the v2 engine are all still here and documented in [`docs/`](./docs/).
 
-**Multiple machines?** Yes — `git clone` + `install-zaude2.sh`, or `zaude update --source https://github.com/ziadmomen10/zaude`. The PAT lives only in `~/.zaude/secrets` and is never committed.
-
----
-
-## Contributing
-
-[`CONTRIBUTING.md`](./CONTRIBUTING.md) has the full guide. Opening a PR implies the lightweight contributor agreement: your code lands under MIT, the Zaude name stays with the project.
+**Multiple machines?** `git clone` + `install-zaude2.sh`, or `zaude update --source https://github.com/ziadmomen10/zaude`. Secrets live only in `~/.zaude/secrets/` and are never committed.
 
 ---
 
 ## License and name
 
 **Code:** [MIT](./LICENSE). Use it, fork it, ship it, sell it — attribution appreciated.
-
-**Zaude™:** an unregistered trademark of Ziad Momen. If you fork and substantially modify, rename your fork. See [TRADEMARK.md](./TRADEMARK.md).
-
----
+**Zaude™:** an unregistered trademark of Ziad Momen. Fork and substantially modify ⇒ rename your fork. See [TRADEMARK.md](./TRADEMARK.md).
 
 ## Credits
 
-Built by **[Ziad Momen](https://github.com/ziadmomen10)** at UltaHost.
-
-Agent patterns adapted from [wshobson/agents](https://github.com/wshobson/agents) and [VoltAgent/awesome-claude-code-subagents](https://github.com/VoltAgent/awesome-claude-code-subagents). Thanks to the [Claude Code](https://claude.com/claude-code) community.
+Built by **[Ziad Momen](https://github.com/ziadmomen10)** at UltaHost. Agent patterns adapted from [wshobson/agents](https://github.com/wshobson/agents) and [VoltAgent/awesome-claude-code-subagents](https://github.com/VoltAgent/awesome-claude-code-subagents). Thanks to the [Claude Code](https://claude.com/claude-code) community.
 
 ---
 
 <div align="center">
 
 **Don't vibe code. Zaude code.**
-
-If Zaude saves you a session's worth of re-explaining, consider [starring the repo](https://github.com/ziadmomen10/zaude).
 
 </div>

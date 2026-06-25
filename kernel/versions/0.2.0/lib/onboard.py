@@ -41,7 +41,8 @@ def scaffold_vault(root, slug, stack, intent=""):
 # marker ARE tracked; these are local health/secret/scratch files). opencode.json was missing from
 # the original fresh-init list. [ZI-001 + codex review HIGH]
 _ZAUDE_IGNORE = (".zaude/.lock", ".zaude/*.tmp.*", ".zaude/codex.json", ".zaude/opencode.json",
-                 ".zaude/persona/", ".zaude/memory/", "__pycache__/")
+                 ".zaude/kimi.json", ".zaude/glm.json", ".zaude/persona/", ".zaude/memory/",
+                 "__pycache__/")
 
 
 def ensure_gitignore(root):
