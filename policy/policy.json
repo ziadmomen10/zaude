@@ -190,6 +190,18 @@
       "summary": "Show OpenCode review-seat status (the third, model-diverse best-effort reviewer). Never gates."
     },
     {
+      "name": "kimi",
+      "cli": "kimi",
+      "group": "control",
+      "summary": "Show Kimi review-seat status (the fourth, model-diverse best-effort reviewer — Moonshot). Never gates."
+    },
+    {
+      "name": "glm",
+      "cli": "glm",
+      "group": "control",
+      "summary": "Show GLM review-seat status (the fifth, model-diverse best-effort reviewer — Zhipu/z.ai). Never gates."
+    },
+    {
       "name": "agents",
       "cli": "agents",
       "group": "control",
@@ -354,10 +366,12 @@
     ],
     "external_reviewers": [
       "codex",
-      "opencode"
+      "opencode",
+      "kimi",
+      "glm"
     ],
     "external_reviewer_best_effort": true,
-    "external_reviewers_note": "BOTH are advisory/best-effort, NEVER required: a missing/unauth/out-of-credit/crashed external reviewer never blocks /review or /ship. The ship gate reads ONLY unresolved_critical_high.",
+    "external_reviewers_note": "ALL are advisory/best-effort, NEVER required: a missing/unauth/out-of-credit/crashed external reviewer never blocks /review or /ship. The ship gate reads ONLY unresolved_critical_high.",
     "tiers": {
       "T0": "trivial (docs/comments/format) — fast lane, audit only",
       "T1": "small fix — code flows; evidence (tests) before ship",
@@ -371,10 +385,12 @@
     "seats": [
       "claude_lenses",
       "codex",
-      "opencode"
+      "opencode",
+      "kimi",
+      "glm"
     ],
     "shadow": [],
-    "rule": "Claude lenses always run. Codex and OpenCode are BEST-EFFORT external seats: a missing / unauthenticated / out-of-credit / timed-out / crashed / skipped reviewer NEVER blocks /review or /ship — the cycle continues without it (recorded honestly), and an available-but-unrun reviewer is a non-blocking nudge. The two seats are independent (one's no-credit backoff never affects the other). The ship gate reads ONLY unresolved_critical_high — no seat sets the gate by itself; the driver folds any verdict it wants to honor into that count. OpenCode is provider-agnostic, so it adds a MODEL-DIVERSE third voice (e.g. Gemini/GPT/local)."
+    "rule": "Claude lenses always run. Codex, OpenCode, Kimi and GLM are BEST-EFFORT external seats: a missing / unauthenticated / out-of-credit / timed-out / crashed / skipped reviewer NEVER blocks /review or /ship — the cycle continues without it (recorded honestly), and an available-but-unrun reviewer is a non-blocking nudge. The external seats are independent (one's no-credit backoff never affects another's). The ship gate reads ONLY unresolved_critical_high — no seat sets the gate by itself; the driver folds any verdict it wants to honor into that count. OpenCode is provider-agnostic (e.g. Gemini/GPT/local), Kimi is Moonshot's kimi-for-coding, and GLM is Zhipu/z.ai (run via the claude-code drop-in) — adding MODEL-DIVERSE third, fourth and fifth voices."
   },
   "hooks": {
     "PreToolUse": {

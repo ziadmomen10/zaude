@@ -10,7 +10,7 @@ stable. stdlib + lib leaves only; no cli/trace/state import -> no cycle.
 import sys
 import time
 
-from lib import gates, codex, opencode
+from lib import gates, codex, opencode, kimi, glm
 
 def _seat(outcome, verdict=None, summary=None, reason=None, retry_at=None, now=None, **extra):
     """A codex review-seat record. `enforced` means ONLY 'codex actually participated' (outcome ==
@@ -123,6 +123,30 @@ def _opencode_review_seat(zd, args, tier):
                        skip_ack=getattr(args, "skip_opencode_ack", None))
 
 
+def _kimi_review_seat(zd, args, tier):
+    """The Kimi seat — a fourth, MODEL-DIVERSE best-effort reviewer (Moonshot, model
+    `kimi-for-coding`). Same contract as codex/opencode: never gates, never raises. [L13/graceful
+    external reviewers]"""
+    return _panel_seat(zd, tier, kimi, "kimi",
+                       getattr(args, "kimi", "auto"), getattr(args, "kimi_verdict", None),
+                       getattr(args, "kimi_summary", ""), getattr(args, "kimi_error", None),
+                       getattr(args, "kimi_retry_at", None),
+                       fix_hint="Run `kimi login` to authenticate.",
+                       skip_ack=getattr(args, "skip_kimi_ack", None))
+
+
+def _glm_review_seat(zd, args, tier):
+    """The GLM seat — a fifth, MODEL-DIVERSE best-effort reviewer (Zhipu/z.ai GLM, run via the
+    claude-code drop-in pointed at z.ai). Same contract as codex/opencode/kimi: never gates, never
+    raises. [L13/graceful external reviewers]"""
+    return _panel_seat(zd, tier, glm, "glm",
+                       getattr(args, "glm", "auto"), getattr(args, "glm_verdict", None),
+                       getattr(args, "glm_summary", ""), getattr(args, "glm_error", None),
+                       getattr(args, "glm_retry_at", None),
+                       fix_hint="Drop a z.ai token at ~/.zaude/secrets/zai (or set ZAI_API_KEY).",
+                       skip_ack=getattr(args, "skip_glm_ack", None))
+
+
 # Seats whose 'skipped' state means the reviewer WAS AVAILABLE (or deliberately turned off) and so
 # the model-diverse review actually happened-not-at-all — these are the skips that must be either RUN
 # or explicitly ACKNOWLEDGED before a CLEAN high-risk review can be recorded. (missing/present_noauth/
@@ -139,10 +163,10 @@ def panel_skip_block(tier, seats):
     model-diverse seats SILENTLY skipped (off / never / available_but_not_run) — so /review and /ship
     passed though no diverse reviewer ever looked. This closes it WITHOUT spawning anything: a seat
     that was available-but-skipped at T3/T4 must be RUN (pass a verdict) or DELIBERATELY acknowledged
-    (skip_ack). Deterministic order: codex then opencode (first offender wins)."""
+    (skip_ack). Deterministic order: codex, opencode, kimi, glm (first offender wins)."""
     if tier not in gates.HIGH_RISK:
         return None
-    for name in ("codex", "opencode"):
+    for name in ("codex", "opencode", "kimi", "glm"):
         seat = (seats or {}).get(name) or {}
         if (seat.get("outcome") == "skipped"
                 and seat.get("reason") in _BLOCKING_SKIP_REASONS

@@ -12,7 +12,7 @@ import subprocess
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib import (paths, trace, state as st, pm, onboard, gates, codex, agents,  # noqa: E402
-                 persona, router, memory, vault, opencode)
+                 persona, router, memory, vault, opencode, kimi, glm)
 
 
 def _kernel_version():
@@ -525,7 +525,8 @@ def cmd_flow_finish(args):
 
 # seat logic extracted to lib/review_seats.py (finding E); re-exported for a stable API.
 from lib.review_seats import (  # noqa: E402
-    _seat, _panel_seat, _codex_review_seat, _opencode_review_seat, panel_skip_block)
+    _seat, _panel_seat, _codex_review_seat, _opencode_review_seat, _kimi_review_seat,
+    _glm_review_seat, panel_skip_block)
 
 
 def cmd_review(args):
@@ -544,18 +545,24 @@ def cmd_review(args):
         for _nm, _mode, _ack in (("codex", getattr(args, "codex", "auto"),
                                   getattr(args, "skip_codex_ack", None)),
                                  ("opencode", getattr(args, "opencode", "auto"),
-                                  getattr(args, "skip_opencode_ack", None))):
+                                  getattr(args, "skip_opencode_ack", None)),
+                                 ("kimi", getattr(args, "kimi", "auto"),
+                                  getattr(args, "skip_kimi_ack", None)),
+                                 ("glm", getattr(args, "glm", "auto"),
+                                  getattr(args, "skip_glm_ack", None))):
             if _mode in ("off", "never") and not _ack:
                 sys.stderr.write("refused: /review cannot record a CLEAN review — the %s seat is "
                                  "turned %s at %s without acknowledgement. Run it and pass "
                                  "--%s-verdict pass|concerns|fail, or record a deliberate skip with "
                                  "--skip-%s-ack \"<reason>\".\n" % (_nm, _mode, tier, _nm, _nm))
                 return 3
-    # TWO best-effort external seats (codex + opencode); each is independent and NEITHER touches
-    # `unresolved_critical_high` — the ship gate reads only that, so neither seat can gate. The
-    # driver folds any verdict it wants to HONOR into --unresolved itself.
+    # FOUR best-effort external seats (codex + opencode + kimi + glm); each is independent and NONE touches
+    # `unresolved_critical_high` — the ship gate reads only that, so no seat can gate. The driver folds
+    # any verdict it wants to HONOR into --unresolved itself.
     seats = {"codex": _codex_review_seat(zd, args, tier),
-             "opencode": _opencode_review_seat(zd, args, tier)}
+             "opencode": _opencode_review_seat(zd, args, tier),
+             "kimi": _kimi_review_seat(zd, args, tier),
+             "glm": _glm_review_seat(zd, args, tier)}
     # PANEL-ENFORCEMENT GATE (high-risk, clean-review only): a CLEAN review (no unresolved
     # CRITICAL/HIGH) must NOT be recordable while a model-diverse seat that WAS AVAILABLE (or turned
     # off) is silently skipped — the diagnosed hole. Refuse BEFORE any write/trace append (write
@@ -1879,6 +1886,62 @@ def cmd_opencode(args):
     return 0
 
 
+def cmd_kimi(args):
+    """Read-only Kimi status (availability + retry window) for the fourth best-effort review seat
+    (Moonshot, kimi-for-coding). Always exits 0 — like /codex & /opencode, a status view, never a
+    gate. [graceful external reviewers]"""
+    zd, root = _resolve(args)
+    d = kimi.read_status(zd)
+    if getattr(args, "probe", False) or not d.get("last_probe"):
+        pr = kimi.probe()
+        d["last_probe"] = pr
+        kimi.write_status(zd, d)
+    else:
+        pr = d["last_probe"]
+    retry = d.get("retry") or {}
+    if getattr(args, "as_json", False):
+        print(json.dumps({"status": pr.get("status"), "version": pr.get("version"),
+                          "detail": pr.get("detail"), "retry": retry}))
+        return 0
+    print("kimi: %s (%s)" % (pr.get("status"), pr.get("detail") or ""))
+    print("retry: %s" % ("blocked reason=%s retry_at=%s" % (retry.get("reason"), retry.get("retry_at"))
+                         if retry.get("blocked") else "none"))
+    if pr.get("status") != kimi.READY:
+        print("hint: install Kimi (https://code.kimi.com) and run `kimi login` to authenticate. "
+              "Best-effort, model-diverse — reviews proceed without it.")
+    return 0
+
+
+def cmd_glm(args):
+    """Read-only GLM status (availability + token + retry window) for the fifth best-effort review
+    seat (Zhipu/z.ai GLM, run via the claude-code drop-in). Always exits 0 — like /codex, /opencode &
+    /kimi, a status view, never a gate. [graceful external reviewers]"""
+    zd, root = _resolve(args)
+    d = glm.read_status(zd)
+    if getattr(args, "probe", False) or not d.get("last_probe"):
+        pr = glm.probe()
+        d["last_probe"] = pr
+        glm.write_status(zd, d)
+    else:
+        pr = d["last_probe"]
+    retry = d.get("retry") or {}
+    tok = ("configured" if glm.have_token() else
+           ("MISCONFIGURED" if glm.token_misconfigured() else "none"))
+    if getattr(args, "as_json", False):
+        print(json.dumps({"status": pr.get("status"), "version": pr.get("version"),
+                          "detail": pr.get("detail"), "token": tok, "retry": retry}))
+        return 0
+    print("glm: %s (%s)" % (pr.get("status"), pr.get("detail") or ""))
+    print("token: %s" % tok)
+    print("retry: %s" % ("blocked reason=%s retry_at=%s" % (retry.get("reason"), retry.get("retry_at"))
+                         if retry.get("blocked") else "none"))
+    if pr.get("status") != glm.READY:
+        print("hint: subscribe to the z.ai GLM Coding Plan, drop the API key at ~/.zaude/secrets/zai "
+              "(or set ZAI_API_KEY), and ensure the `claude-glm` runner is on PATH. Best-effort, "
+              "model-diverse — reviews proceed without it.")
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="zaude")
     p.add_argument("--path", default=None)
@@ -1977,6 +2040,29 @@ def main(argv=None):
     sp.add_argument("--opencode-retry-at", dest="opencode_retry_at", default=None,
                     help="explicit retry time (epoch seconds or ISO-8601) for an opencode no-credit "
                          "backoff; overrides any reset hint parsed from --opencode-error.")
+    # fourth best-effort, model-diverse seat: Kimi (Moonshot, kimi-for-coding). Same contract as codex.
+    sp.add_argument("--kimi", choices=("auto", "on", "off", "never"), default="auto")
+    sp.add_argument("--kimi-verdict", dest="kimi_verdict",
+                    choices=("pass", "concerns", "fail"), default=None)
+    sp.add_argument("--kimi-summary", dest="kimi_summary", default="")
+    sp.add_argument("--kimi-error", dest="kimi_error", default=None,
+                    help="kimi's error output when it FAILED. Arms the no-credit backoff so it "
+                         "auto-resumes when the reset window passes.")
+    sp.add_argument("--kimi-retry-at", dest="kimi_retry_at", default=None,
+                    help="explicit retry time (epoch seconds or ISO-8601) for a kimi no-credit "
+                         "backoff; overrides any reset hint parsed from --kimi-error.")
+    # fifth best-effort, model-diverse seat: GLM (Zhipu/z.ai, run via the claude-code drop-in). Same
+    # contract as codex.
+    sp.add_argument("--glm", choices=("auto", "on", "off", "never"), default="auto")
+    sp.add_argument("--glm-verdict", dest="glm_verdict",
+                    choices=("pass", "concerns", "fail"), default=None)
+    sp.add_argument("--glm-summary", dest="glm_summary", default="")
+    sp.add_argument("--glm-error", dest="glm_error", default=None,
+                    help="glm's error output when it FAILED. Arms the no-credit backoff so it "
+                         "auto-resumes when the reset window passes.")
+    sp.add_argument("--glm-retry-at", dest="glm_retry_at", default=None,
+                    help="explicit retry time (epoch seconds or ISO-8601) for a glm no-credit "
+                         "backoff; overrides any reset hint parsed from --glm-error.")
     # PANEL-ENFORCEMENT acks: at T3/T4 a CLEAN /review refuses if a model-diverse seat was AVAILABLE
     # (or turned off) yet skipped without acknowledgement. Record a DELIBERATE skip with the reason.
     sp.add_argument("--skip-codex-ack", dest="skip_codex_ack", default=None,
@@ -1986,6 +2072,14 @@ def main(argv=None):
     sp.add_argument("--skip-opencode-ack", dest="skip_opencode_ack", default=None,
                     help="acknowledge a deliberate opencode skip on a CLEAN high-risk review (the "
                          "reason). Without it, a clean T3/T4 /review refuses when opencode was "
+                         "available/off but not run. Best-effort seat — still spawns nothing.")
+    sp.add_argument("--skip-kimi-ack", dest="skip_kimi_ack", default=None,
+                    help="acknowledge a deliberate kimi skip on a CLEAN high-risk review (the "
+                         "reason). Without it, a clean T3/T4 /review refuses when kimi was "
+                         "available/off but not run. Best-effort seat — still spawns nothing.")
+    sp.add_argument("--skip-glm-ack", dest="skip_glm_ack", default=None,
+                    help="acknowledge a deliberate glm skip on a CLEAN high-risk review (the "
+                         "reason). Without it, a clean T3/T4 /review refuses when glm was "
                          "available/off but not run. Best-effort seat — still spawns nothing.")
     sp.set_defaults(fn=cmd_review)
 
@@ -2083,6 +2177,12 @@ def main(argv=None):
 
     sp = sub.add_parser("opencode"); sp.add_argument("--probe", action="store_true")
     sp.add_argument("--json", dest="as_json", action="store_true"); sp.set_defaults(fn=cmd_opencode)
+
+    sp = sub.add_parser("kimi"); sp.add_argument("--probe", action="store_true")
+    sp.add_argument("--json", dest="as_json", action="store_true"); sp.set_defaults(fn=cmd_kimi)
+
+    sp = sub.add_parser("glm"); sp.add_argument("--probe", action="store_true")
+    sp.add_argument("--json", dest="as_json", action="store_true"); sp.set_defaults(fn=cmd_glm)
 
     sp = sub.add_parser("scan-markers"); sp.add_argument("path", nargs="?", default=None)
     sp.set_defaults(fn=cmd_scan_markers)
